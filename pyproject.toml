@@ -1,0 +1,181 @@
+[tool.poetry]
+name = "uritomo-backend"
+version = "0.1.0"
+description = "Real-time translation service with cultural context and RAG-powered explanations"
+authors = ["URITOMO Team"]
+readme = "README.md"
+packages = [{include = "app"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+# FastAPI & Server
+fastapi = "^0.109.0"
+uvicorn = {extras = ["standard"], version = "^0.27.0"}
+python-multipart = "^0.0.6"
+websockets = "^12.0"
+
+# Database
+sqlalchemy = "^2.0.25"
+alembic = "^1.13.1"
+aiomysql = "^0.2.0"
+pymysql = "^1.1.0"
+cryptography = "^42.0.0"
+
+# Redis & Queue
+redis = "^5.0.1"
+rq = "^1.16.1"
+hiredis = "^2.3.2"
+
+# Vector Database
+qdrant-client = "^1.7.0"
+
+# Object Storage (Optional)
+minio = "^7.2.3"
+
+# Pydantic & Validation
+pydantic = "^2.5.3"
+pydantic-settings = "^2.1.0"
+email-validator = "^2.1.0"
+
+# Authentication & Security
+python-jose = {extras = ["cryptography"], version = "^3.3.0"}
+passlib = {extras = ["bcrypt"], version = "^1.7.4"}
+bcrypt = "^4.1.2"
+
+# External API Clients
+openai = "^1.10.0"
+httpx = "^0.26.0"
+aiohttp = "^3.9.1"
+
+# Utilities
+python-dotenv = "^1.0.0"
+tenacity = "^8.2.3"
+pytz = "^2024.1"
+
+# Logging & Monitoring
+structlog = "^24.1.0"
+python-json-logger = "^2.0.7"
+sentry-sdk = {extras = ["fastapi"], version = "^1.39.2"}
+
+[tool.poetry.group.dev.dependencies]
+# Testing
+pytest = "^7.4.4"
+pytest-asyncio = "^0.23.3"
+pytest-cov = "^4.1.0"
+pytest-mock = "^3.12.0"
+httpx = "^0.26.0"
+faker = "^22.0.0"
+
+# Code Quality
+black = "^24.1.1"
+isort = "^5.13.2"
+ruff = "^0.1.14"
+mypy = "^1.8.0"
+pre-commit = "^3.6.0"
+
+# Types
+types-redis = "^4.6.0.20240106"
+types-pytz = "^2024.1.0.20240203"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | \.mypy_cache
+  | \.pytest_cache
+  | migrations
+  | __pycache__
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+skip_gitignore = true
+known_first_party = ["app"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "C",   # flake8-comprehensions
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+]
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "migrations",
+]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+follow_imports = "normal"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "qdrant_client.*",
+    "minio.*",
+    "rq.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --strict-markers"
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+]
+
+[tool.coverage.run]
+source = ["app"]
+omit = [
+    "*/tests/*",
+    "*/migrations/*",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
