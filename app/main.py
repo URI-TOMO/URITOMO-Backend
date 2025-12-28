@@ -48,12 +48,52 @@ async def lifespan(app: FastAPI):
     await close_db_connection()
 
 
+tags_metadata = [
+    {
+        "name": "auth",
+        "description": "Authentication operations (Login, Register).",
+    },
+    {
+        "name": "orgs",
+        "description": "Manage Organizations and their glossaries.",
+    },
+    {
+        "name": "meetings",
+        "description": "Create and manage translation meetings.",
+    },
+    {
+        "name": "segments",
+        "description": "Ingest and process transcript segments.",
+    },
+    {
+        "name": "websocket",
+        "description": "Real-time communication using WebSocket.",
+    },
+    {
+        "name": "health",
+        "description": "System health check.",
+    },
+]
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="URITOMO Backend",
-        description="Real-time translation and cultural context service",
+        description="""
+URITOMO API provides real-time translation with cultural context explanations.
+
+## Features
+* **Real-time Translation**: Low-latency WebSocket streaming.
+* **Cultural Context**: RAG-powered explanations for nuanced expressions.
+* **Meeting Management**: Complete lifecycle for multilingual sessions.
+* **Organizations**: Shared glossaries and cultural knowledge.
+""",
         version="0.1.0",
+        openapi_tags=tags_metadata,
         openapi_url=f"{settings.api_prefix}/openapi.json",
+        docs_url="/docs",
+        redoc_url="/redoc",
+        swagger_ui_parameters={"persistAuthorization": True},
         lifespan=lifespan,
     )
 
