@@ -11,6 +11,57 @@ URITOMO provides:
 - **Organization glossaries** for domain-specific terminology
 - **Hybrid explanation triggers** (rule-based + AI-powered)
 
+## 🚀 Quick Start (Docker)
+
+If you already have Docker installed, follow these steps to quickly run the services.
+
+### 1. Environment Configuration (.env)
+Copy the example environment file to create your own.
+
+```bash
+cp .env.example .env
+```
+
+Open the `.env` file and configure your external API keys (OpenAI, DeepL, etc.). Even without API keys, you can perform local testing by setting `TRANSLATION_PROVIDER=MOCK`.
+
+### 2. Start Services
+
+You can use the `Makefile` to complete all configurations at once:
+
+```bash
+# Performs initial build, execution, DB migrations, and sample data seeding.
+make init
+```
+
+Or to use Docker commands directly:
+
+```bash
+# Build and start containers
+docker-compose up -d --build
+
+# Create DB tables
+docker-compose exec api alembic upgrade head
+
+# Insert sample data (cultural guides, etc.)
+docker-compose exec api python scripts/seed_culture_cards.py
+```
+
+### 3. Verification & Access
+
+Once services are running, you can access them at:
+- **FastAPI Server**: [http://localhost:8000](http://localhost:8000)
+- **API Documentation (Swagger)**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **Qdrant (Vector DB)**: [http://localhost:6333/dashboard](http://localhost:6333/dashboard)
+
+To check logs while running:
+```bash
+make logs
+# or
+docker-compose logs -f
+```
+
+---
+
 ## 🛠 Tech Stack
 
 - **Framework**: FastAPI + Uvicorn
@@ -19,49 +70,6 @@ URITOMO provides:
 - **Vector DB**: Qdrant
 - **Storage**: MinIO (optional)
 - **AI**: OpenAI GPT-4 / DeepL (with mock mode for development)
-
-## 🚀 Quick Start
-
-### Prerequisites
-- Docker & Docker Compose
-- Python 3.11+ (for local development)
-
-### 1. Clone & Setup Environment
-
-```bash
-git clone <repository-url>
-cd URITOMO-Backend
-
-# Copy environment template
-cp .env.example .env
-
-# Edit .env and set your API keys (or use MOCK mode)
-```
-
-### 2. Start Services
-
-```bash
-# Initialize and start all services
-make init
-
-# Or manually:
-make build
-make up
-make migrate
-make seed
-```
-
-### 3. Verify Installation
-
-```bash
-# Check health
-make health
-
-# Or visit:
-# - API: http://localhost:8000
-# - API Docs: http://localhost:8000/docs
-# - Qdrant Dashboard: http://localhost:6333/dashboard
-```
 
 ## 📖 API Documentation
 
