@@ -60,6 +60,70 @@ make logs
 docker-compose logs -f
 ```
 
+## 💻 Running on Windows
+
+Since `make` is not natively available on Windows, you have a few options:
+
+### Option 1: WSL2 (Recommended)
+If you have **WSL2 (Windows Subsystem for Linux)** installed:
+1. Open your WSL terminal (e.g., Ubuntu).
+2. Follow the Mac/Linux instructions exactly (`make init`).
+
+### Option 2: Manual Commands (PowerShell / CMD)
+If you don't have `make`, run these commands in order:
+
+1. **Build & Start**:
+   ```powershell
+   docker-compose build --no-cache
+   docker-compose up -d
+   ```
+
+2. **Run Migrations**:
+   ```powershell
+   docker-compose exec api alembic upgrade head
+   ```
+
+3. **Seed Data**:
+   ```powershell
+   docker-compose exec api python scripts/seed_culture_cards.py
+   docker-compose exec api python scripts/seed_glossary.py
+   ```
+
+---
+
+## 👨‍💻 Git Conventions
+
+### Branch Naming
+Follow this format: `[type]/[description]`
+
+| Type | Description | Example |
+|------|-------------|---------|
+| `feature` | New features | `feature/user-auth` |
+| `fix` | Bug fixes | `fix/login-error` |
+| `hotfix` | Critical production fixes | `hotfix/security-patch` |
+| `chore` | Maintenance, config changes | `chore/update-dependencies` |
+| `docs` | Documentation updates | `docs/api-guide` |
+| `refactor` | Code restructuring | `refactor/segment-logic` |
+
+### Commit Messages
+Follow the [Conventional Commits](https://www.conventionalcommits.org/) specification:
+
+**Format**: `[Type]: [Description]`
+
+- **feat**: A new feature
+- **fix**: A bug fix
+- **docs**: Documentation only changes
+- **style**: Changes that do not affect the meaning of the code (white-space, formatting, etc)
+- **refactor**: A code change that neither fixes a bug nor adds a feature
+- **perf**: A code change that improves performance
+- **test**: Adding missing tests or correcting existing tests
+- **chore**: Changes to the build process or auxiliary tools and libraries
+
+**Examples**:
+- `feat: add real-time translation websocket endpoint`
+- `fix: resolve crash when Qdrant is unavailable`
+- `chore: update poetry dependencies`
+
 ---
 
 ## 🛠 Tech Stack

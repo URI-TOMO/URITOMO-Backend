@@ -1,5 +1,5 @@
 # Base stage with Python 3.11
-FROM python:3.11-slim as base
+FROM python:3.11-slim AS base
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Development stage
-FROM base as development
+FROM base AS development
 
 # Install Poetry
 RUN pip install poetry
@@ -27,7 +27,7 @@ COPY pyproject.toml poetry.lock* ./
 
 # Install dependencies (without creating virtualenv since we're in Docker)
 RUN poetry config virtualenvs.create false \
-    && poetry install --no-interaction --no-ansi
+    && poetry install --no-interaction --no-ansi --no-root
 
 # Copy application code
 COPY . .
@@ -39,7 +39,7 @@ EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
 # Production stage
-FROM base as production
+FROM base AS production
 
 # Install Poetry
 RUN pip install poetry
@@ -49,7 +49,7 @@ COPY pyproject.toml poetry.lock* ./
 
 # Install only production dependencies
 RUN poetry config virtualenvs.create false \
-    && poetry install --no-interaction --no-ansi --only main
+    && poetry install --no-interaction --no-ansi --only main --no-root
 
 # Copy application code
 COPY . .
