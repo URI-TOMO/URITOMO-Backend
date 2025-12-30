@@ -5,7 +5,7 @@ This module manages all application configuration using Pydantic Settings.
 Environment variables are loaded from .env file.
 """
 
-from typing import Literal
+from typing import Literal, Optional
 from functools import lru_cache
 
 from pydantic import Field, validator
