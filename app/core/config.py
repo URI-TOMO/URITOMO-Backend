@@ -65,11 +65,11 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
 
     # External APIs
-    openai_api_key: str = ""
-    openai_model: str = "gpt-4-turbo-preview"
+    openai_api_key: Optional[str] = None
+    openai_model: str = "gpt-5-nano"
     openai_embedding_model: str = "text-embedding-3-small"
 
-    deepl_api_key: str = ""
+    deepl_api_key: Optional[str] = None
     deepl_api_url: str = "https://api-free.deepl.com/v2/translate"
 
     # Translation Settings

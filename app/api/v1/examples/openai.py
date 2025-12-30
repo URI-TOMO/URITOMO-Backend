@@ -20,7 +20,7 @@ async def chat_openai(request: ChatRequest):
         "Content-Type": "application/json"
     }
     data = {
-        "model": "gpt-3.5-turbo",
+        "model": settings.openai_model,
         "messages": [{"role": "user", "content": request.message}]
     }
 

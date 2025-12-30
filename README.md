@@ -60,6 +60,20 @@ make logs
 docker-compose logs -f
 ```
 
+### 4. Stopping the Server
+To stop all running services:
+
+**Mac / Linux:**
+```bash
+make down
+```
+
+**Windows:**
+```powershell
+docker-compose down
+```
+
+---
 ## 💻 Running on Windows
 
 Since `make` is not natively available on Windows, you have a few options:
@@ -350,7 +364,7 @@ Customize with your own cards using `scripts/seed_culture_cards.py`.
 2. Make changes
 3. Run `make format` and `make lint`
 4. Run `make test`
-5. Submit PR
+5. Submit PR to the `dev` branch (Do NOT merge directly into `main`)
 
 ## 📄 License
 
