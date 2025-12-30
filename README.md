@@ -212,10 +212,15 @@ URITOMO-Backend/
 │   │   ├── logging.py
 │   │   └── deps.py
 │   ├── api/v1/                 # API endpoints
-│   │   ├── auth.py
-│   │   ├── meetings.py
-│   │   ├── segments.py
-│   │   └── ws_realtime.py
+│   │   ├── core/               # Core services (Auth, Orgs, Meetings)
+│   │   │   ├── auth.py
+│   │   │   ├── health.py
+│   │   │   ├── meetings.py
+│   │   │   └── orgs.py
+│   │   ├── ai/                 # AI features (Segments, Realtime)
+│   │   │   ├── segments.py
+│   │   │   └── ws_realtime.py
+│   │   └── examples/           # Verification examples
 │   ├── models/                 # SQLAlchemy models
 │   ├── schemas/                # Pydantic schemas
 │   ├── services/               # Business logic

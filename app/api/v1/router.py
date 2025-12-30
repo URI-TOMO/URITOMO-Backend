@@ -4,11 +4,13 @@ API Router configuration
 
 from fastapi import APIRouter
 
-from app.api.v1 import (
+from app.api.v1.core import (
     health,
     auth,
     orgs,
     meetings,
+)
+from app.api.v1.ai import (
     segments,
     ws_realtime,
 )
