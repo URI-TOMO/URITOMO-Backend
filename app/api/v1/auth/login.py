@@ -1,5 +1,5 @@
 """
-Auth Endpoints
+Login Endpoints
 """
 
 from typing import Any
@@ -10,30 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
 from app.core.security import create_access_token
-from app.schemas.auth import Token, UserCreate, UserResponse, UserLogin
+from app.schemas.auth import Token, UserLogin
 from app.services.auth_service import AuthService
 
 router = APIRouter()
-
-
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def register(
-    user_in: UserCreate,
-    db: AsyncSession = Depends(get_db),
-) -> Any:
-    """
-    Register new user
-    """
-    auth_service = AuthService(db)
-    user = await auth_service.get_user_by_email(user_in.email)
-    if user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered",
-        )
-    
-    new_user = await auth_service.create_user(user_in)
-    return new_user
 
 
 @router.post("/login", response_model=Token)

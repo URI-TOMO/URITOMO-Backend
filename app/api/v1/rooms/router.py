@@ -94,7 +94,7 @@ async def get_meeting_summary(
     # For MVP, assuming checking `meeting.summaries` relationship via get_meeting
     # But lazy loading might be an issue if session closed.
     # Better to have dedicated method.
-    pass 
+    
     # Placeholder: Implemented below correctly
     from app.models.summary import Summary
     from sqlalchemy import select
