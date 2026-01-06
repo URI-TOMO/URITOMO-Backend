@@ -20,8 +20,6 @@ help:
 	@echo "  make seed            - Seed database with sample data"
 	@echo "  make db-shell        - Open MySQL shell"
 	@echo ""
-	@echo "  make test            - Run all tests"
-	@echo "  make test-cov        - Run tests with coverage"
 	@echo "  make lint            - Run linters"
 	@echo "  make format          - Format code with black and isort"
 	@echo ""
@@ -87,23 +85,14 @@ seed:
 db-shell:
 	docker-compose exec mysql mysql -u uritomo_user -p uritomo
 
-# Testing and Quality
-test:
-	docker-compose exec api pytest tests/ -v
-
-test-cov:
-	docker-compose exec api pytest tests/ -v --cov=app --cov-report=html --cov-report=term
-
-test-ws:
-	docker-compose exec api pytest tests/test_ws.py -v
-
+# Quality
 lint:
 	docker-compose exec api ruff check app/
 	docker-compose exec api mypy app/
 
 format:
-	docker-compose exec api black app/ tests/
-	docker-compose exec api isort app/ tests/
+	docker-compose exec api black app/
+	docker-compose exec api isort app/
 	docker-compose exec api ruff check --fix app/
 
 # Development helpers

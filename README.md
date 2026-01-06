@@ -149,22 +149,6 @@ Follow the [Conventional Commits](https://www.conventionalcommits.org/) specific
 - **Storage**: MinIO (optional)
 - **AI**: OpenAI GPT-4 / DeepL (with mock mode for development)
 
-## 📖 API Documentation
-
-Once running, visit:
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
-
-### Key Endpoints
-
-#### REST API
-```
-POST   /api/v1/auth/register          - Register new user
-POST   /api/v1/auth/login             - Login and get JWT token
-GET    /api/v1/orgs                   - List organizations
-POST   /api/v1/meetings               - Create meeting
-POST   /api/v1/segments               - Ingest transcript segment
-POST   /api/v1/meetings/{id}/summary  - Trigger meeting summary
 GET    /api/v1/meetings/{id}/summary  - Get meeting summary
 ```
 
@@ -247,19 +231,6 @@ URITOMO-Backend/
 ```
 
 ## 🧪 Development
-
-### Running Tests
-
-```bash
-# All tests
-make test
-
-# With coverage
-make test-cov
-
-# WebSocket tests only
-make test-ws
-```
 
 ### Code Quality
 
