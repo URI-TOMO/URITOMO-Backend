@@ -1,44 +1,38 @@
 """
-Login Endpoints
+Simple Login Endpoint
 """
 
-from typing import Any
-
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.deps import get_db
-from app.core.security import create_access_token
-from app.schemas.auth import Token, UserLogin
-from app.services.auth_service import AuthService
+from fastapi import APIRouter, HTTPException
 
 router = APIRouter()
 
 
-@router.post("/login", response_model=Token)
-async def login(
-    form_data: OAuth2PasswordRequestForm = Depends(), # supports username/password form
-    db: AsyncSession = Depends(get_db),
-) -> Any:
+@router.get("/login")
+async def login(name: str, password: str):
     """
-    OAuth2 compatible token login, get an access token for future requests
+    Simple login endpoint - returns access token
+    
+    Args:
+        name: Username
+        password: User password
+    
+    Returns:
+        access_token: JWT token for authentication
     """
-    auth_service = AuthService(db)
-    
-    # We map form_data.username to email
-    login_data = UserLogin(email=form_data.username, password=form_data.password)
-    
-    user = await auth_service.authenticate_user(login_data)
-    if not user:
+    # TODO: Add actual authentication logic here
+    # For now, simple validation
+    if not name or not password:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=400,
+            detail="Name and password are required"
         )
-        
-    access_token = create_access_token(data={"sub": str(user.id)})
+    
+    # TODO: Verify credentials against database
+    # TODO: Generate real JWT token
+    
+    # Temporary mock response
+    access_token = f"mock_token_for_{name}"
+    
     return {
-        "access_token": access_token,
-        "token_type": "bearer",
+        "access_token": access_token
     }

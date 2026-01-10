@@ -8,11 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_db
 from app.core.security import verify_token
 from app.core.logging import get_logger
-from app.services.connection_manager import manager
-from app.services.segment_service import SegmentService
-from app.services.translation_service import TranslationService
-from app.services.explanation_service import ExplanationService
-from app.services.rag_service import RagService
+from app.services.rooms.connection_manager import manager
+from app.services.rooms.segment_service import SegmentService
+from app.services.translation.translation_service import TranslationService
+from app.services.translation.explanation_service import ExplanationService
+from app.services.translation.rag_service import RagService
 from app.schemas.segment import SegmentIngest
 from app.infra.qdrant import client as qdrant_client
 

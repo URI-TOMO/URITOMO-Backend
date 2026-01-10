@@ -5,7 +5,7 @@ Meeting Summary Job
 import asyncio
 from app.core.logging import get_logger
 from app.core.config import settings
-from app.services.llm_clients.openai_client import OpenAIClient
+from app.services.translation.llm_clients.openai_client import OpenAIClient
 # Note: In worker context, we need to create new DB sessions if accessing DB
 # For simple MVP, we might mock DB access or use sync/async adapters
 

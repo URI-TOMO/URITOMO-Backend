@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_db, CurrentUserDep, QueueDep
 from app.schemas.meeting import MeetingCreate, MeetingResponse, MeetingUpdate
 from app.schemas.summary import SummaryResponse
-from app.services.meeting_service import MeetingService
+from app.services.rooms.meeting_service import MeetingService
 from app.infra.queue import JobQueue
 
 router = APIRouter()

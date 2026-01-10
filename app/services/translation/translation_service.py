@@ -10,8 +10,8 @@ from typing import Optional, Tuple
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services.llm_clients.openai_client import OpenAIClient
-from app.services.llm_clients.deepl_client import DeepLClient
+from app.services.translation.llm_clients.openai_client import OpenAIClient
+from app.services.translation.llm_clients.deepl_client import DeepLClient
 
 logger = get_logger(__name__)
 
