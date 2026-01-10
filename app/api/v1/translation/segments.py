@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db, CurrentUserDep
 from app.schemas.segment import SegmentCreate, SegmentResponse, SegmentIngest
-from app.services.segment_service import SegmentService
+from app.services.rooms.segment_service import SegmentService
 
 router = APIRouter()
 

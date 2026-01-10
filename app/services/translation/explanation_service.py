@@ -9,8 +9,8 @@ from typing import List, Optional
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services.rag_service import RagService, CultureCard
-from app.services.llm_clients.openai_client import OpenAIClient
+from app.services.translation.rag_service import RagService, CultureCard
+from app.services.translation.llm_clients.openai_client import OpenAIClient
 from app.schemas.rag import ExplainDecision
 from app.models.translation import TranslationSegment
 

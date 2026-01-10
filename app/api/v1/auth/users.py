@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_db, CurrentUserDep
 from app.models.user import User
 from app.schemas.auth import UserCreate, UserResponse
-from app.services.auth_service import AuthService
+from app.services.auth.auth_service import AuthService
 
 router = APIRouter()
 
@@ -35,7 +35,7 @@ async def register(
     return new_user
 
 
-@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_me(
     current_user_id: CurrentUserDep,
     db: AsyncSession = Depends(get_db),
@@ -50,3 +50,5 @@ async def delete_me(
     await db.delete(user)
     await db.commit()
     return None
+
+

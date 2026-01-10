@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db, CurrentUserDep
 from app.schemas.org import OrgCreate, OrgResponse, OrgUpdate
-from app.services.org_service import OrgService
+from app.services.auth.org_service import OrgService
 
 router = APIRouter()
 

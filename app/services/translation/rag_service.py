@@ -45,7 +45,7 @@ class RagService:
             # Call OpenAI Embedding API
             # Placeholder for actual implementation using openai_client
             # For now assuming mock if not implemented
-            from app.services.llm_clients.openai_client import OpenAIClient
+            from app.services.translation.llm_clients.openai_client import OpenAIClient
             client = OpenAIClient()
             return await client.get_embedding(text)
 
