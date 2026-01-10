@@ -15,13 +15,7 @@ from app.core.config import settings
 from app.models.base import Base
 
 # Import all models so Alebmic can see them
-from app.models.user import User, UserOrg
-from app.models.org import Organization
-from app.models.meeting import Meeting, MeetingParticipant, MeetingSetting
-from app.models.segment import TranscriptSegment
-from app.models.translation import TranslationSegment
-from app.models.summary import Summary
-from app.models.glossary import GlossaryEntry
+from app.models.meeting import Meeting, Participant, ChatMessage
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
