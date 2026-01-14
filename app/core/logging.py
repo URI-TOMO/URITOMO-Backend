@@ -134,3 +134,6 @@ class LatencyLogger:
             latency_ms=round(latency_ms, 2),
             success=exc_type is None,
         )
+
+
+        
