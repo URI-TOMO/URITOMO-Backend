@@ -1,7 +1,3 @@
-"""
-Alembic Environment Config
-"""
-
 import asyncio
 from logging.config import fileConfig
 
@@ -10,18 +6,6 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
-
-from app.core.config import settings
-from app.models.base import Base
-
-# Import all models so Alebmic can see them
-from app.models.user import User, UserOrg
-from app.models.org import Organization
-from app.models.meeting import Meeting, MeetingParticipant, MeetingSetting
-from app.models.segment import TranscriptSegment
-from app.models.translation import TranslationSegment
-from app.models.summary import Summary
-from app.models.glossary import GlossaryEntry
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -32,19 +16,32 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Overwrite sqlalchemy.url with the one from settings
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# add your model's DeclarativeBase object here
+# for 'autogenerate' support
+from app.models.base import Base
+# Import all models here so they are registered on Base.metadata
+from app.models.user import User
+from app.models.room import Room, RoomMember
+from app.models.message import ChatMessage
+from app.models.token import AuthToken
+from app.models.live import Live
+from app.models.ai import AIEvent
 
 target_metadata = Base.metadata
+
+# other values from the config, defined by the needs of env.py,
+# can be acquired:
+# my_important_option = config.get_main_option("my_important_option")
+# ... etc.
 
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
 
     This configures the context with just a URL
-    and not an Engine, though an Engine is acceptable
-    here as well.  By skipping the Engine creation
-    we don't even need a DBAPI to be available.
+    and not an Engine, though an Engine is also acceptable
+    here.  By skipping the Engine creation we don't even need a
+    DBAPI to be available.
 
     Calls to context.execute() here emit the given string to the
     script output.
@@ -69,15 +66,22 @@ def do_run_migrations(connection: Connection) -> None:
         context.run_migrations()
 
 
-async def run_migrations_online() -> None:
-    """Run migrations in 'online' mode.
-
-    In this scenario we need to create an Engine
+async def run_async_migrations() -> None:
+    """In this scenario we need to create an Engine
     and associate a connection with the context.
 
     """
+    config_section = config.get_section(config.config_ini_section, {})
+    
+    # Override sqlalchemy.url with environment variable if present
+    import os
+    db_url = os.environ.get("DATABASE_URL")
+    if db_url:
+        # aiomysql is async, alembic needs to know that
+        config_section["sqlalchemy.url"] = db_url
+
     connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        config_section,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
@@ -88,7 +92,13 @@ async def run_migrations_online() -> None:
     await connectable.dispose()
 
 
+def run_migrations_online() -> None:
+    """Run migrations in 'online' mode."""
+
+    asyncio.run(run_async_migrations())
+
+
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    asyncio.run(run_migrations_online())
+    run_migrations_online()

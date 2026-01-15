@@ -50,6 +50,10 @@ async def lifespan(app: FastAPI):
 
 tags_metadata = [
     {
+        "name": "Example CRUD",
+        "description": "Example CRUD operations for User and Room models.",
+    },
+    {
         "name": "auth",
         "description": "Authentication operations (Login, Register).",
     },
