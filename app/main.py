@@ -17,7 +17,7 @@ from app.core.errors import (
     validation_exception_handler,
     general_exception_handler,
 )
-from app.core.logging import setup_logging, RequestIDMiddleware
+from app.core.login  import setup_logging, RequestIDMiddleware
 from app.infra.db import close_db_connection
 from app.infra.redis import init_redis_pool, close_redis_pool
 from app.infra.qdrant import init_qdrant_client, close_qdrant_client, ensure_collections_exist
