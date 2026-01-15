@@ -6,7 +6,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
-    from app.models.room import Room
+    from app.models.room import Room, RoomMember
     from app.models.token import AuthToken
 
 
@@ -21,4 +21,5 @@ class User(Base, TimestampMixin):
 
     # Relationships
     created_rooms: Mapped[List["Room"]] = relationship("Room", back_populates="creator")
+    memberships: Mapped[List["RoomMember"]] = relationship("RoomMember", back_populates="user")
     tokens: Mapped[List["AuthToken"]] = relationship("AuthToken", back_populates="user")

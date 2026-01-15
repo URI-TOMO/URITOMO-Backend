@@ -7,6 +7,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
+    from app.models.ai import AIEvent
+    from app.models.live import Live
     from app.models.message import ChatMessage
     from app.models.user import User
 
@@ -30,6 +32,8 @@ class Room(Base):
     creator: Mapped["User"] = relationship("User", back_populates="created_rooms")
     members: Mapped[List["RoomMember"]] = relationship("RoomMember", back_populates="room")
     messages: Mapped[List["ChatMessage"]] = relationship("ChatMessage", back_populates="room")
+    live_events: Mapped[List["Live"]] = relationship("Live", back_populates="room")
+    ai_events: Mapped[List["AIEvent"]] = relationship("AIEvent", back_populates="room")
 
 
 class RoomMember(Base):
@@ -52,3 +56,6 @@ class RoomMember(Base):
 
     # Relationships
     room: Mapped["Room"] = relationship("Room", back_populates="members")
+    user: Mapped[Optional["User"]] = relationship("User", back_populates="memberships")
+    sent_messages: Mapped[List["ChatMessage"]] = relationship("ChatMessage", back_populates="sender_member")
+    live_utterances: Mapped[List["Live"]] = relationship("Live", back_populates="member")
