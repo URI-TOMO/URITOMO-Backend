@@ -10,7 +10,7 @@ from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from app.core.login  import get_logger
+from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
