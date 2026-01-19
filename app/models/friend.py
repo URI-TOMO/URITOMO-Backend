@@ -26,6 +26,9 @@ class UserFriend(Base):
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False), nullable=True)
 
     meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    
+    # name or nickname for the friend (optional)
+    friend_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
     # Constraints and Indexes
     __table_args__ = (
