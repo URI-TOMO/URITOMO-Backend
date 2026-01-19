@@ -82,6 +82,30 @@ async def get_current_user_id(auth: Annotated[HTTPAuthorizationCredentials, Depe
     return user_id
 
 
+def refresh_access_token(refresh_token: str) -> str:
+    """
+    Validate refresh token and issue a new access token.
+    
+    Args:
+        refresh_token: The refresh token string
+        
+    Returns:
+        A new access token string
+        
+    Raises:
+        AuthenticationError: If token is invalid or expired
+    """
+    payload = decode_token(refresh_token)
+    if not payload or payload.get("type") != "refresh":
+        raise AuthenticationError("Invalid refresh token")
+    
+    user_id = payload.get("sub")
+    if not user_id:
+        raise AuthenticationError("Invalid token payload")
+        
+    # Create new access token
+    return create_access_token(data={"sub": user_id})
+
 
 # Frequently used Dependency Annotation
 CurrentUserDep = Annotated[str, Depends(get_current_user_id)]
