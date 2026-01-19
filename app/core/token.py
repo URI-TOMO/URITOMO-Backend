@@ -6,15 +6,16 @@ All JWT and authentication dependency operations are centralized here.
 from datetime import datetime, timedelta
 from typing import Annotated, Optional
 
-from fastapi import Depends
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import Depends, Request
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 
 from app.core.config import settings
 from app.core.errors import AuthenticationError
 
-# OAuth2 scheme definition
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.api_prefix}/auth/login")
+# HTTP Bearer scheme (Only shows a token input box in Swagger)
+security_scheme = HTTPBearer()
+
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -69,15 +70,17 @@ def verify_token(token: str) -> Optional[str]:
     return user_id
 
 
-async def get_current_user_id(token: Annotated[str, Depends(oauth2_scheme)]) -> str:
+async def get_current_user_id(auth: Annotated[HTTPAuthorizationCredentials, Depends(security_scheme)]) -> str:
     """
     FastAPI dependency to validate token and return current user ID.
     Used in protected routes.
     """
+    token = auth.credentials
     user_id = verify_token(token)
     if not user_id:
         raise AuthenticationError("Could not validate credentials")
     return user_id
+
 
 
 # Frequently used Dependency Annotation

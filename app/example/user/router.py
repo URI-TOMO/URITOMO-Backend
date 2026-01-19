@@ -5,6 +5,7 @@ API router for User creation and Mock data setup.
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.token import create_access_token
 from app.example.user.crud import UserCRUD
 from app.example.user.schemas import (
     UserCreate,
@@ -16,6 +17,32 @@ router = APIRouter(prefix="/example", tags=["Example CRUD"])
 
 
 @router.post(
+    "/login-debug",
+    summary="One-shot Debug Login (Setup Mock + Get Token)",
+)
+async def login_debug(
+    user_id: str = Query(..., description="User ID to login/debug with"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    1. Ensures user exists and mock data is set up.
+    2. Generates and returns a JWT access token.
+    """
+    # Setup mock data (includes creating user if doesn't exist)
+    await UserCRUD.create_mock_data(db, user_id)
+    
+    # Generate token
+    access_token = create_access_token(data={"sub": user_id})
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": user_id
+    }
+
+
+@router.post(
+
     "/users",
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
