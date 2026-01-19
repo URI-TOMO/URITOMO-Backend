@@ -27,6 +27,9 @@ class UserFriend(Base):
 
     meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
+    # name or nickname for the friend (optional)
+    friend_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
     # Constraints and Indexes
     __table_args__ = (
         # Prevent self-friending
