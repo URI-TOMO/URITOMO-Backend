@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from app.core.token import CurrentUserDep
-from app.example.crud import UserCRUD
-from app.example.schemas import UserResponse
+from app.example.user.crud import UserCRUD
+from app.example.user.schemas import UserResponse
 from app.core.deps import SessionDep
 
 router = APIRouter(prefix="/example/token", tags=["Example Token Auth"])
