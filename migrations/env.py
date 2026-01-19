@@ -26,6 +26,7 @@ from app.models.message import ChatMessage
 from app.models.token import AuthToken
 from app.models.live import Live
 from app.models.ai import AIEvent
+from app.models.friend import UserFriend
 
 target_metadata = Base.metadata
 
