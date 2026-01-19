@@ -94,23 +94,69 @@ def upgrade() -> None:
         sa.Column('id', sa.String(length=64), nullable=False),
         sa.Column('user_id', sa.String(length=64), nullable=False),
         sa.Column('token_hash', sa.CHAR(length=64), nullable=False),
-        sa.Column('token_type', sa.String(length=16), nullable=False),
-        sa.Column('scope', sa.JSON(), nullable=True),
         sa.Column('issued_at', sa.DateTime(), nullable=False),
         sa.Column('expires_at', sa.DateTime(), nullable=False),
         sa.Column('revoked_at', sa.DateTime(), nullable=True),
-        sa.Column('last_used_at', sa.DateTime(), nullable=True),
+        sa.Column('session_id', sa.String(length=64), nullable=True),
         sa.Column('device_meta', sa.JSON(), nullable=True),
         sa.ForeignKeyConstraint(['user_id'], ['users.id'], name='fk_tokens_user'),
-        sa.PrimaryKeyConstraint('id')
+        sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint('token_hash')
     )
-    op.create_index('idx_tokens_hash', 'auth_tokens', ['token_hash'], unique=False)
-    op.create_index('idx_tokens_user_type', 'auth_tokens', ['user_id', 'token_type', 'expires_at'], unique=False)
+    op.create_index('idx_auth_tokens_user_expires', 'auth_tokens', ['user_id', 'expires_at'], unique=False)
+
+    # --- live ---
+    op.create_table(
+        'live',
+        sa.Column('id', sa.String(length=64), nullable=False),
+        sa.Column('room_id', sa.String(length=64), nullable=False),
+        sa.Column('member_id', sa.String(length=64), nullable=False),
+        sa.Column('seq', sa.BigInteger(), nullable=False),
+        sa.Column('text', sa.Text(), nullable=False),
+        sa.Column('lang', sa.String(length=8), nullable=True),
+        sa.Column('start_ms', sa.Integer(), nullable=True),
+        sa.Column('end_ms', sa.Integer(), nullable=True),
+        sa.Column('meta', sa.JSON(), nullable=True),
+        sa.Column('created_at', sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(['member_id'], ['room_members.id'], name='fk_live_member'),
+        sa.ForeignKeyConstraint(['room_id'], ['rooms.id'], name='fk_live_room'),
+        sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint('room_id', 'seq', name='uq_live_room_seq')
+    )
+    op.create_index('idx_live_member_seq', 'live', ['member_id', 'seq'], unique=False)
+    op.create_index('idx_live_room_created', 'live', ['room_id', 'created_at'], unique=False)
+
+    # --- ai_events ---
+    op.create_table(
+        'ai_events',
+        sa.Column('id', sa.String(length=64), nullable=False),
+        sa.Column('room_id', sa.String(length=64), nullable=False),
+        sa.Column('seq', sa.BigInteger(), nullable=False),
+        sa.Column('event_type', sa.String(length=16), nullable=False),
+        sa.Column('source_live_id', sa.String(length=64), nullable=True),
+        sa.Column('original_text', sa.Text(), nullable=True),
+        sa.Column('original_lang', sa.String(length=8), nullable=True),
+        sa.Column('translated_text', sa.Text(), nullable=True),
+        sa.Column('translated_lang', sa.String(length=8), nullable=True),
+        sa.Column('text', sa.Text(), nullable=True),
+        sa.Column('lang', sa.String(length=8), nullable=True),
+        sa.Column('meta', sa.JSON(), nullable=True),
+        sa.Column('created_at', sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(['room_id'], ['rooms.id'], name='fk_ai_room'),
+        sa.ForeignKeyConstraint(['source_live_id'], ['live.id'], name='fk_ai_source_live'),
+        sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint('room_id', 'seq', name='uq_ai_room_seq')
+    )
+    op.create_index('idx_ai_room_created', 'ai_events', ['room_id', 'created_at'], unique=False)
+    op.create_index('idx_ai_source_live', 'ai_events', ['source_live_id'], unique=False)
 
 
 def downgrade() -> None:
+    op.drop_table('ai_events')
+    op.drop_table('live')
     op.drop_table('auth_tokens')
     op.drop_table('chat_messages')
     op.drop_table('room_members')
     op.drop_table('rooms')
     op.drop_table('users')
+
