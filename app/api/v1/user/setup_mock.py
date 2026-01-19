@@ -44,7 +44,7 @@ async def setup_mock_data(
         friend_user = User(
             id=friend_id,
             display_name=f"Friend {i}",
-            email=f"friend_{i}@example.com",
+            email=f"friend_{i}_{uuid.uuid4().hex[:6]}@example.com",
             status="active"
         )
         db.add(friend_user)

@@ -9,7 +9,6 @@ from app.models.user import User
 from app.models.friend import UserFriend
 from app.models.room import Room, RoomMember
 
-
 router = APIRouter()
 
 # ============ Schemas ============
@@ -21,7 +20,6 @@ class UserMainInfo(BaseModel):
 class FriendInfo(BaseModel):
     id: str
     friend_name: str
-    friend_count: int  # how many friends the user has in total
     email: Optional[EmailStr]
 
 class RoomInfo(BaseModel):
@@ -30,12 +28,13 @@ class RoomInfo(BaseModel):
 
 class MainPageResponse(BaseModel):
     user: UserMainInfo
+    friend_count : int
     user_friends: List[FriendInfo]
     rooms: List[RoomInfo]
 
 # ============ Endpoint ============
 
-@router.get("user/main", response_model=MainPageResponse, tags=["main"])
+@router.get("/user/main", response_model=MainPageResponse, tags=["main"])
 
 
 async def get_main_page_data(
@@ -81,7 +80,6 @@ async def get_main_page_data(
         friends_list.append(FriendInfo(
             id=u_row.id,
             friend_name=name,
-            friend_count=total_friends,
             email=u_row.email
         ))
 
@@ -102,6 +100,7 @@ async def get_main_page_data(
 
     return MainPageResponse(
         user=UserMainInfo(display_name=user.display_name, email=user.email),
+        friend_count=total_friends,
         user_friends=friends_list,
         rooms=room_list
     )
