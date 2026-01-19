@@ -29,7 +29,7 @@ def upgrade() -> None:
         sa.Column('status', sa.String(length=16), server_default='active', nullable=False),
         sa.Column('created_at', sa.DateTime(), nullable=False),
         sa.Column('updated_at', sa.DateTime(), nullable=False),
-        sa.PrimaryKeyConstraぃint('id'),
+        sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('email')
     )
 
