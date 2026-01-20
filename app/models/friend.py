@@ -7,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
+    from app.models.dm import DmThread
     from app.models.user import User
 
 
@@ -47,3 +48,5 @@ class UserFriend(Base):
     # Relationships
     requester: Mapped["User"] = relationship("User", foreign_keys=[requester_id], back_populates="sent_friend_requests")
     addressee: Mapped["User"] = relationship("User", foreign_keys=[addressee_id], back_populates="received_friend_requests")
+    
+    dm_thread: Mapped[Optional["DmThread"]] = relationship("DmThread", back_populates="friend_relationship", uselist=False)
