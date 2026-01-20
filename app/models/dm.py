@@ -86,10 +86,6 @@ class DmMessage(Base):
         UniqueConstraint("thread_id", "seq", name="uq_dm_messages_thread_seq"),
         Index("idx_dm_messages_thread_created", "thread_id", "created_at"),
         Index("idx_dm_messages_sender_user", "sender_user_id"),
-        CheckConstraint(
-            "(sender_type <> 'human') OR (sender_user_id IS NOT NULL)",
-            name="chk_dm_messages_sender_user_when_human"
-        ),
     )
 
     # Relationships
