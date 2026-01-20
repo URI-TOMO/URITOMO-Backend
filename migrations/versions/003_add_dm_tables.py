@@ -66,7 +66,6 @@ def upgrade() -> None:
         sa.Column('end_ms', sa.Integer(), nullable=True),
         sa.Column('meta', sa.JSON(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=False),
-        sa.CheckConstraint("(sender_type <> 'human') OR (sender_user_id IS NOT NULL)", name='chk_dm_messages_sender_user_when_human'),
         sa.ForeignKeyConstraint(['sender_user_id'], ['users.id'], name='fk_dm_messages_sender_user', onupdate='CASCADE', ondelete='SET NULL'),
         sa.ForeignKeyConstraint(['thread_id'], ['dm_threads.id'], name='fk_dm_messages_thread', onupdate='CASCADE', ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id'),
