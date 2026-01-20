@@ -6,8 +6,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer
 
 from app.api.v1.router import api_router
+
 from app.core.config import settings
 from app.core.errors import (
     AppError,
@@ -50,13 +52,18 @@ async def lifespan(app: FastAPI):
 
 tags_metadata = [
     {
+        "name": "Example Token Auth",
+        "description": "Tokens for testing authentication. Get your debug token here!",
+    },
+    {
         "name": "Example CRUD",
-        "description": "Example CRUD operations for User and Room models.",
+        "description": "Quickly setup users and mock data for development.",
     },
     {
         "name": "auth",
-        "description": "Authentication operations (Login, Register).",
+        "description": "Standard Authentication operations (Login, Register).",
     },
+
     {
         "name": "orgs",
         "description": "Manage Organizations and their glossaries.",
@@ -97,9 +104,13 @@ URITOMO API provides real-time translation with cultural context explanations.
         openapi_url=f"{settings.api_prefix}/openapi.json",
         docs_url="/docs",
         redoc_url="/redoc",
-        swagger_ui_parameters={"persistAuthorization": True},
+        swagger_ui_parameters={
+            "persistAuthorization": True,
+            "displayRequestDuration": True
+        },
         lifespan=lifespan,
     )
+
 
     # Middleware
     app.add_middleware(RequestIDMiddleware)
@@ -111,8 +122,21 @@ URITOMO API provides real-time translation with cultural context explanations.
         allow_headers=settings.cors_headers,
     )
 
+    # Root Route
+    @app.get("/", tags=["health"], include_in_schema=False)
+    async def root():
+        return {
+            "message": "Welcome to URITOMO Backend API",
+            "docs": "/docs",
+            "status": "operational"
+        }
+
     # Routes
+
+    # We include dependencies=[Depends(HTTPBearer())] if we want to FORCE it everywhere globally.
+    # But usually, it's better to apply it to the main api_router.
     app.include_router(api_router, prefix=settings.api_prefix)
+
 
     # Exception Handlers
     app.add_exception_handler(AppError, app_exception_handler)
