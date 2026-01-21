@@ -25,6 +25,7 @@ class Room(Base):
 
     # Indexes
     __table_args__ = (
+        Index("idx_rooms_created_by", "created_by"),
         Index("idx_rooms_status_created", "status", "created_at"),
     )
 
@@ -34,6 +35,7 @@ class Room(Base):
     messages: Mapped[List["ChatMessage"]] = relationship("ChatMessage", back_populates="room")
     live_events: Mapped[List["Live"]] = relationship("Live", back_populates="room")
     ai_events: Mapped[List["AIEvent"]] = relationship("AIEvent", back_populates="room")
+    live_sessions: Mapped[List["RoomLiveSession"]] = relationship("RoomLiveSession", back_populates="room")
 
 
 class RoomMember(Base):
@@ -51,6 +53,7 @@ class RoomMember(Base):
     # Indexes
     __table_args__ = (
         Index("idx_members_room_joined", "room_id", "joined_at"),
+        Index("idx_members_user", "user_id"),
         Index("idx_members_room_user", "room_id", "user_id"),
     )
 
@@ -59,3 +62,61 @@ class RoomMember(Base):
     user: Mapped[Optional["User"]] = relationship("User", back_populates="memberships")
     sent_messages: Mapped[List["ChatMessage"]] = relationship("ChatMessage", back_populates="sender_member")
     live_utterances: Mapped[List["Live"]] = relationship("Live", back_populates="member")
+    live_session_participations: Mapped[List["RoomLiveSessionMember"]] = relationship("RoomLiveSessionMember", back_populates="member")
+
+
+class RoomLiveSession(Base):
+    __tablename__ = "room_live_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    room_id: Mapped[str] = mapped_column(ForeignKey("rooms.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")  # active | ended | deleted
+    started_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=datetime.utcnow)
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False), nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    # Indexes
+    __table_args__ = (
+        Index("idx_live_sessions_room_started", "room_id", "started_at"),
+        Index("idx_live_sessions_status_started", "status", "started_at"),
+        Index("idx_live_sessions_started_by", "started_by"),
+        Index("idx_live_sessions_room_status", "room_id", "status"),
+    )
+
+    # Relationships
+    room: Mapped["Room"] = relationship("Room", back_populates="live_sessions")
+    starter: Mapped["User"] = relationship("User", back_populates="started_live_sessions")
+    session_members: Mapped[List["RoomLiveSessionMember"]] = relationship("RoomLiveSessionMember", back_populates="session")
+
+
+class RoomLiveSessionMember(Base):
+    __tablename__ = "room_live_session_members"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("room_live_sessions.id"), nullable=False)
+    room_id: Mapped[str] = mapped_column(ForeignKey("rooms.id"), nullable=False) # Denormalized
+    member_id: Mapped[str] = mapped_column(ForeignKey("room_members.id"), nullable=False)
+    user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=datetime.utcnow)
+    left_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False), nullable=True)
+    client_meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    # Indexes
+    __table_args__ = (
+        Index("idx_session_members_session", "session_id"),
+        Index("idx_session_members_room_session", "room_id", "session_id"),
+        Index("idx_session_members_member", "member_id"),
+        Index("idx_session_members_user", "user_id"),
+        Index("idx_session_members_session_member", "session_id", "member_id"),
+        Index("idx_session_members_session_joined", "session_id", "joined_at"),
+    )
+
+    # Relationships
+    session: Mapped["RoomLiveSession"] = relationship("RoomLiveSession", back_populates="session_members")
+    member: Mapped["RoomMember"] = relationship("RoomMember", back_populates="live_session_participations")
+    user: Mapped[Optional["User"]] = relationship("User", back_populates="live_session_attendances")
