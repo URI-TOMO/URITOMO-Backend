@@ -18,7 +18,8 @@ class AIEvent(Base):
     room_id: Mapped[str] = mapped_column(ForeignKey("rooms.id"), nullable=False)
     seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
-    event_type: Mapped[str] = mapped_column(String(16), nullable=False)  # translation | assistant
+    # event_type: translation | moderation | summary | asr | intent | error
+    event_type: Mapped[str] = mapped_column(String(16), nullable=False)
     source_live_id: Mapped[Optional[str]] = mapped_column(ForeignKey("live.id"), nullable=True)
 
     # translation columns

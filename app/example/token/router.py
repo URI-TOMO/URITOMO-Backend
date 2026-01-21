@@ -16,7 +16,7 @@ async def get_my_info(
     The user_id is extracted from the 'sub' claim of the token.
     
     To test this:
-    1. Create a user via /api/v1/example/users
+    1. Create a user via /example/users
     2. Obtain a token (you can use create_access_token in a temporary script)
     3. Call this endpoint with 'Authorization: Bearer <token>'
     """

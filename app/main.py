@@ -52,6 +52,10 @@ async def lifespan(app: FastAPI):
 
 tags_metadata = [
     {
+        "name": "debug",
+        "description": "Debug tools for seeding data and testing.",
+    },
+    {
         "name": "Example Token Auth",
         "description": "Tokens for testing authentication. Get your debug token here!",
     },
@@ -131,12 +135,13 @@ URITOMO API provides real-time translation with cultural context explanations.
             "status": "operational"
         }
 
+
     # Routes
 
     # We include dependencies=[Depends(HTTPBearer())] if we want to FORCE it everywhere globally.
     # But usually, it's better to apply it to the main api_router.
+    # Routes
     app.include_router(api_router, prefix=settings.api_prefix)
-
 
     # Exception Handlers
     app.add_exception_handler(AppError, app_exception_handler)
