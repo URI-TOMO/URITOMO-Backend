@@ -8,7 +8,7 @@ from app.models.base import Base, TimestampMixin
 if TYPE_CHECKING:
     from app.models.dm import DmParticipant
     from app.models.friend import UserFriend
-    from app.models.room import Room, RoomMember
+    from app.models.room import Room, RoomLiveSession, RoomLiveSessionMember, RoomMember
     from app.models.token import AuthToken
 
 
@@ -26,6 +26,10 @@ class User(Base, TimestampMixin):
     memberships: Mapped[List["RoomMember"]] = relationship("RoomMember", back_populates="user")
     tokens: Mapped[List["AuthToken"]] = relationship("AuthToken", back_populates="user")
     
+    # Live Sessions
+    started_live_sessions: Mapped[List["RoomLiveSession"]] = relationship("RoomLiveSession", back_populates="starter")
+    live_session_attendances: Mapped[List["RoomLiveSessionMember"]] = relationship("RoomLiveSessionMember", back_populates="user")
+
     # DM
     dm_participations: Mapped[List["DmParticipant"]] = relationship("DmParticipant", back_populates="user")
     

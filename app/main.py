@@ -131,12 +131,16 @@ URITOMO API provides real-time translation with cultural context explanations.
             "status": "operational"
         }
 
+
     # Routes
 
     # We include dependencies=[Depends(HTTPBearer())] if we want to FORCE it everywhere globally.
     # But usually, it's better to apply it to the main api_router.
     app.include_router(api_router, prefix=settings.api_prefix)
-
+    
+    # Debug Router
+    from app.debug.api import router as debug_router
+    app.include_router(debug_router, prefix="/debug", tags=["debug"]) # Corrected import path
 
     # Exception Handlers
     app.add_exception_handler(AppError, app_exception_handler)
