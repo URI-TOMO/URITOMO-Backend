@@ -4,7 +4,7 @@ import hashlib
 from typing import List
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Query
 from sqlalchemy import text, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -273,6 +273,98 @@ async def seed_large_mock_data(db: AsyncSession = Depends(get_db)):
             "sessions_per_room": 5,
             "live_utterances_per_session": 100
         }
+    }
+
+
+
+@router.post("/seed/user", status_code=status.HTTP_201_CREATED)
+async def seed_user_personal_data(
+    user_id: str = Query(..., description="Target User ID to populate personal data for"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    **Personal Data Seeder**
+    
+    Sets up a specific user environment for testing:
+    - Creates the user if missing.
+    - Adds 2 friends (Accepted status).
+    - Creates 2 active rooms where this user is a member/owner.
+    
+    Useful for testing "My Page", "Friends List", or specific user scenarios.
+    """
+    # 1. Ensure main user exists
+    user_stmt = select(User).where(User.id == user_id)
+    user_result = await db.execute(user_stmt)
+    user = user_result.scalar_one_or_none()
+    
+    if not user:
+        user = User(
+            id=user_id,
+            display_name=f"User_{user_id[:4]}",
+            email=f"{user_id}@example.com",
+            locale="ja",
+            status="active",
+            created_at=datetime.utcnow()
+        )
+        db.add(user)
+    
+    # 2. Add friends
+    for i in range(1, 3):
+        friend_id = f"friend_{i}_{uuid4().hex[:6]}"
+        
+        # Create friend user
+        friend_user = User(
+            id=friend_id,
+            display_name=f"Friend {i}",
+            email=f"friend_{i}_{friend_id}@example.com",
+            locale="en",
+            status="active",
+            created_at=datetime.utcnow()
+        )
+        db.add(friend_user)
+        
+        # Create accepted friendship
+        friendship = UserFriend(
+            id=str(uuid4()),
+            requester_id=user_id,
+            addressee_id=friend_id,
+            status="accepted",
+            requested_at=datetime.utcnow(),
+            responded_at=datetime.utcnow()
+        )
+        db.add(friendship)
+        
+    # 3. Add rooms
+    for i in range(1, 3):
+        room_id = str(uuid4())
+        
+        # Create room
+        room = Room(
+            id=room_id,
+            title=f"Personal Study Room {i}",
+            created_by=user_id,
+            status="active",
+            created_at=datetime.utcnow()
+        )
+        db.add(room)
+        
+        # Add user as member
+        member = RoomMember(
+            id=str(uuid4()),
+            room_id=room_id,
+            user_id=user_id,
+            display_name=user.display_name,
+            role="owner" if i == 1 else "member",
+            joined_at=datetime.utcnow()
+        )
+        db.add(member)
+
+    await db.commit()
+
+    return {
+        "message": f"Successfully setup personal mock data for user {user_id}",
+        "user_id": user_id,
+        "items_created": ["User (if new)", "2 Friends", "2 Rooms"]
     }
 
 
