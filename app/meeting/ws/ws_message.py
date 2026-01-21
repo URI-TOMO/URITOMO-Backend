@@ -19,7 +19,7 @@ async def handle_chat_message(session_id: str, user_id: str, data: dict):
     text = data.get("text")
     if not text:
         return
-
+    
     async with AsyncSessionLocal() as db_session:
         # 1. Get Session and Room ID
         session_result = await db_session.execute(

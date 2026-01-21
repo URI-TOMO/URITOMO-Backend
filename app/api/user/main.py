@@ -8,6 +8,7 @@ from app.infra.db import get_db
 from app.models.user import User
 from app.models.friend import UserFriend
 from app.models.room import Room, RoomMember
+from app.core.token import get_current_user_id
 
 router = APIRouter()
 
@@ -38,8 +39,8 @@ class MainPageResponse(BaseModel):
 
 
 async def get_main_page_data(
-    user_id: str = Query(..., description="User ID to fetch data for (Mock for token)"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     Get all necessary data for the main page:
