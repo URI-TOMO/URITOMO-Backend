@@ -10,6 +10,8 @@ from app.models.room import RoomLiveSession
 from app.meeting.ws.manager import manager
 from app.meeting.ws.ws_message import handle_chat_message
 
+from app.infra.db import AsyncSessionLocal
+
 router = APIRouter(prefix="/meeting", tags=["meeting_ws"])
 
 @router.get("/ws-info", include_in_schema=True)

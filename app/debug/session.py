@@ -93,20 +93,26 @@ async def all_in_one_debug_setup(
     ws_url = f"ws://{host}:{settings.api_port}/meeting/{session_id}?token={access_token}"
     
     # PowerShell Script for instant testing
-    ps_script = f"""
-$url = "{ws_url}"
-$ws = New-Object System.Net.WebSockets.ClientWebSocket
-$ct = New-Object System.Threading.CancellationToken
-$ws.ConnectAsync($url, $ct).Wait()
-Write-Host "✅ Connected to {session_id}" -ForegroundColor Green
-$buffer = New-Object byte[] 4096
-while ($ws.State -eq 'Open') {{
-    $res = $ws.ReceiveAsync(new-object System.ArraySegment[byte]($buffer), $ct)
-    $res.Wait()
-    $msg = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $res.Result.Count)
-    Write-Host "📩 $msg" -ForegroundColor Cyan
-}}
-"""
+    # PowerShell Script (One-Liner compatible with JSON copy-paste)
+    # We use single quotes effectively to prevent JSON escaping issues in the browser copy
+    ps_script = (
+        f"$url = '{ws_url}'; "
+        "$ws = New-Object System.Net.WebSockets.ClientWebSocket; "
+        "$ct = New-Object System.Threading.CancellationToken; "
+        "$ws.ConnectAsync($url, $ct).Wait(); "
+        f"Write-Host '✅ Connected to {session_id}' -ForegroundColor Green; "
+        "$buffer = New-Object byte[] 4096; "
+        # Fix: Wrap buffer in comma to pass as single argument to constructor
+        "$segment = New-Object System.ArraySegment[byte] -ArgumentList (, $buffer); "
+        "while ($ws.State -eq 'Open') { "
+        "$res = $ws.ReceiveAsync($segment, $ct); "
+        "$res.Wait(); "
+        "if ($res.Result.Count -gt 0) { "
+        "$msg = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $res.Result.Count); "
+        "Write-Host '📩 ' $msg -ForegroundColor Cyan; "
+        "} }"
+    )
+
 
     return {
         "message": "All-in-one setup complete!",
