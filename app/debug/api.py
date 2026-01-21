@@ -232,11 +232,13 @@ async def seed_large_mock_data(db: AsyncSession = Depends(get_db)):
                 
                 live_text = f"Speaking about important topic point #{u+1}..."
                 
+                global_seq = (s * 100) + u + 1 # Ensure uniqueness per room
+                
                 live = Live(
                     id=str(uuid4()),
                     room_id=room.id,
                     member_id=speaker_member.id,
-                    seq=u+1,
+                    seq=global_seq,
                     text=live_text,
                     lang=speaker_user.locale,
                     start_ms=u*15000,
@@ -250,7 +252,7 @@ async def seed_large_mock_data(db: AsyncSession = Depends(get_db)):
                     ai_event = AIEvent(
                         id=str(uuid4()),
                         room_id=room.id,
-                        seq=u+1,
+                        seq=global_seq,
                         event_type="translation",
                         source_live_id=live.id,
                         original_text=live_text,
