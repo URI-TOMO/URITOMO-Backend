@@ -15,8 +15,12 @@ from app.models import (
     UserFriend, DmThread, DmParticipant, DmMessage,
     RoomLiveSession, RoomLiveSessionMember, AuthToken
 )
+from app.core.token import CurrentUserDep
 
-router = APIRouter()
+from app.debug.signin import router as signin_router
+
+router = APIRouter(tags=["debug"])
+router.include_router(signin_router)
 
 FIXED_USERS = [
     {"id": "1", "display_name": "Jin", "email": "jin@example.com", "locale": "ko"},
@@ -145,6 +149,7 @@ async def seed_large_mock_data(db: AsyncSession = Depends(get_db)):
         ("Serious Business", [users[1], users[5]]),
     ]
     
+    created_rooms = []
     # Increase density: Create 300 messages per room
     for title, participants in room_configs:
         room = Room(
@@ -155,6 +160,7 @@ async def seed_large_mock_data(db: AsyncSession = Depends(get_db)):
             created_at=datetime.utcnow() - timedelta(days=40)
         )
         db.add(room)
+        created_rooms.append(room)
         
         member_map = {}
         for p in participants:
@@ -266,6 +272,7 @@ async def seed_large_mock_data(db: AsyncSession = Depends(get_db)):
     await db.commit()
     return {
         "message": "Heavy dense mock data seeded!",
+        "created_room_ids": [r.id for r in created_rooms],
         "stats": {
             "users": len(users),
             "friendships": user_count * (user_count - 1) // 2,
@@ -393,4 +400,183 @@ async def clear_all_data(db: AsyncSession = Depends(get_db)):
     await db.commit()
     
     return {"message": "All data cleared successfully!"}
+
+
+@router.post("/user-gen", status_code=status.HTTP_201_CREATED)
+async def generate_user_heavy_data(
+    current_user_id: CurrentUserDep,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    **User Data Generator (Heavy)**
+    
+    Generates a large amount of mock data for the CURRENTLY LOGGED-IN user.
+    - 10 New Friends with DM threads (50 msgs each)
+    - 5 New Rooms with those friends (Active, 100 msgs each)
+    - 2 Past Live Sessions per room with AI events
+    """
+    
+    total_messages_created = 0
+    new_friends_count = 0
+    new_rooms_count = 0
+    
+    # 1. Ensure user exists (Object fetch)
+    result = await db.execute(select(User).where(User.id == current_user_id))
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        # Should be handled by Auth but just in case
+        return {"error": "User not found"}
+        
+    created_friends = []
+
+    # 2. Create 10 Random Friends & DM Threads
+    for i in range(10):
+        friend_id = f"gen_f_{uuid4().hex[:8]}"
+        friend = User(
+            id=friend_id,
+            display_name=f"Friend {uuid4().hex[:4]}",
+            email=f"{friend_id}@example.com",
+            locale=random.choice(["en", "ko", "ja"]),
+            status="active",
+            created_at=datetime.utcnow() - timedelta(days=60)
+        )
+        db.add(friend)
+        created_friends.append(friend)
+        
+        # Friendship
+        friendship = UserFriend(
+            id=str(uuid4()),
+            requester_id=current_user_id,
+            addressee_id=friend_id,
+            status="accepted",
+            requested_at=datetime.utcnow() - timedelta(days=59),
+            responded_at=datetime.utcnow() - timedelta(days=59)
+        )
+        db.add(friendship)
+        
+        # DM Thread
+        thread = DmThread(
+            id=str(uuid4()),
+            user_friend_id=friendship.id,
+            status="active",
+            created_at=datetime.utcnow() - timedelta(days=59)
+        )
+        db.add(thread)
+        
+        # Participants
+        db.add(DmParticipant(id=str(uuid4()), thread_id=thread.id, user_id=current_user_id, joined_at=thread.created_at))
+        db.add(DmParticipant(id=str(uuid4()), thread_id=thread.id, user_id=friend_id, joined_at=thread.created_at))
+        
+        # 50 DM Messages
+        base_time = thread.created_at
+        for k in range(50):
+            is_me = k % 2 == 0
+            sender = user if is_me else friend
+            
+            msg = DmMessage(
+                id=str(uuid4()),
+                thread_id=thread.id,
+                seq=k+1,
+                sender_type="human",
+                sender_user_id=sender.id,
+                message_type="text",
+                text=f"DM Message #{k+1} from {sender.display_name}. Long time no see!",
+                lang=sender.locale,
+                created_at=base_time + timedelta(hours=k)
+            )
+            db.add(msg)
+            total_messages_created += 1
+            
+    await db.flush()
+    new_friends_count = 10
+    
+    # 3. Create 5 Rooms with mixed friends
+    created_rooms = []
+    for i in range(5):
+        room_title = f"{user.display_name}'s Project {uuid4().hex[:4]}"
+        room = Room(
+            id=str(uuid4()),
+            title=room_title,
+            created_by=user.id,
+            status="active",
+            created_at=datetime.utcnow() - timedelta(days=30)
+        )
+        db.add(room)
+        created_rooms.append(room)
+        
+        # Add Self
+        me_member = RoomMember(
+            id=str(uuid4()),
+            room_id=room.id,
+            user_id=user.id,
+            display_name=user.display_name,
+            role="owner",
+            joined_at=room.created_at
+        )
+        db.add(me_member)
+        
+        # Add 3-5 random friends
+        participants = [me_member] # keep list of Member objects
+        joined_friends = random.sample(created_friends, k=random.randint(3, 8))
+        for f in joined_friends:
+            mem = RoomMember(
+                id=str(uuid4()),
+                room_id=room.id,
+                user_id=f.id,
+                display_name=f.display_name,
+                role="member",
+                joined_at=room.created_at
+            )
+            db.add(mem)
+            participants.append(mem)
+            
+        await db.flush()
+        
+        # 100 Chat Messages
+        base_time = room.created_at + timedelta(minutes=5)
+        for k in range(100):
+            sender_mem = random.choice(participants) # Pick random member including self
+            
+            msg = ChatMessage(
+                id=str(uuid4()),
+                room_id=room.id,
+                seq=k+1,
+                sender_type="human",
+                sender_member_id=sender_mem.id,
+                message_type="text",
+                text=f"Chat in {room_title}. Msg #{k+1}. Hello @{participants[0].display_name}",
+                lang="en", # simplifying
+                created_at=base_time + timedelta(hours=k*2)
+            )
+            db.add(msg)
+            total_messages_created += 1
+            
+        # 2 Past Live Sessions
+        for s in range(2):
+            ls = RoomLiveSession(
+                id=str(uuid4()),
+                room_id=room.id,
+                title=f"Weekly Sync {s+1}",
+                status="ended",
+                started_by=user.id,
+                started_at=room.created_at + timedelta(days=s*7),
+                ended_at=room.created_at + timedelta(days=s*7, hours=1)
+            )
+            db.add(ls)
+            
+    await db.commit()
+    new_rooms_count = 5
+
+    return {
+        "message": f"Generated heavy data for user {user.display_name} ({current_user_id})",
+        "created_room_ids": [r.id for r in created_rooms],
+        "stats": {
+            "new_friends": new_friends_count,
+            "new_rooms": new_rooms_count,
+            "total_messages": total_messages_created,
+            "dms_per_friend": 50,
+            "msgs_per_room": 100
+        }
+    }
 
