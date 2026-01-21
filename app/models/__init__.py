@@ -4,7 +4,7 @@ from app.models.dm import DmMessage, DmParticipant, DmThread
 from app.models.friend import UserFriend
 from app.models.live import Live
 from app.models.message import ChatMessage
-from app.models.room import Room, RoomMember
+from app.models.room import Room, RoomLiveSession, RoomLiveSessionMember, RoomMember
 from app.models.token import AuthToken
 from app.models.user import User
 
@@ -13,6 +13,8 @@ __all__ = [
     "User",
     "Room",
     "RoomMember",
+    "RoomLiveSession",
+    "RoomLiveSessionMember",
     "ChatMessage",
     "AuthToken",
     "Live",
