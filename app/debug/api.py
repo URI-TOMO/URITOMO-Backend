@@ -18,9 +18,11 @@ from app.models import (
 from app.core.token import CurrentUserDep
 
 from app.debug.signin import router as signin_router
+from app.debug.session import router as session_router
 
 router = APIRouter(tags=["debug"])
 router.include_router(signin_router)
+router.include_router(session_router)
 
 FIXED_USERS = [
     {"id": "1", "display_name": "Jin", "email": "jin@example.com", "locale": "ko"},
