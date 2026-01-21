@@ -8,7 +8,7 @@ from app.infra.db import get_db
 from app.core.token import CurrentUserDep
 from app.models import User, Room, RoomMember, RoomLiveSession
 
-router = APIRouter()
+router = APIRouter(tags=["debug"])
 
 @router.post("/setup-session", status_code=status.HTTP_201_CREATED)
 async def setup_debug_session(
