@@ -10,74 +10,109 @@ from app.models import User, Room, RoomMember, RoomLiveSession
 
 router = APIRouter(tags=["debug"])
 
-@router.post("/setup-session", status_code=status.HTTP_201_CREATED)
-async def setup_debug_session(
-    current_user_id: CurrentUserDep,
+from app.core.token import create_access_token
+import random
+
+@router.post("/all-in-one", status_code=status.HTTP_201_CREATED)
+async def all_in_one_debug_setup(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    **Debug Session Setup**
+    **All-In-One Debug Setup (No Auth Required)**
     
-    1. Uses the token to identify the current user.
-    2. Finds an existing room for the user OR creates a new one.
-    3. Starts a new active live session in that room.
-    4. Returns the user_id, room_id, and session_id.
-    
-    Useful for quickly jumping into a live session for testing.
+    1. Creates a random user.
+    2. Issues an Access Token.
+    3. Creates a Room & Active Live Session.
+    4. Returns everything needed to test WebSocket immediately (including a Copy-Paste PowerShell script).
     """
-    # 1. Get User
-    user = await db.get(User, current_user_id)
-    if not user:
-        return {"error": "User not found in database. Please signup first."}
-
-    # 2. Get or Create a Room
-    room_stmt = select(Room).join(RoomMember, Room.id == RoomMember.room_id).where(RoomMember.user_id == current_user_id).limit(1)
-    result = await db.execute(room_stmt)
-    room = result.scalar_one_or_none()
-
-    if not room:
-        room_id = str(uuid4())
-        room = Room(
-            id=room_id,
-            title=f"Debug Room for {user.display_name}",
-            created_by=current_user_id,
-            status="active",
-            created_at=datetime.utcnow()
-        )
-        db.add(room)
-        await db.flush()
-        
-        member = RoomMember(
-            id=str(uuid4()),
-            room_id=room.id,
-            user_id=current_user_id,
-            display_name=user.display_name,
-            role="owner",
-            joined_at=datetime.utcnow()
-        )
-        db.add(member)
-        await db.flush()
+    # 1. Create Random User
+    rand_suffix = uuid4().hex[:6]
+    user_id = f"debug_user_{rand_suffix}"
     
-    # 3. Create Live Session
-    session_id = f"ls_{uuid4().hex[:16]}"
+    user = User(
+        id=user_id,
+        display_name=f"Tester_{rand_suffix}",
+        email=f"tester_{rand_suffix}@example.com",
+        locale="ko",
+        status="active",
+        created_at=datetime.utcnow()
+    )
+    db.add(user)
+    
+    # 2. Setup Room
+    room_id = f"room_{rand_suffix}"
+    room = Room(
+        id=room_id,
+        title=f"Debug Room {rand_suffix}",
+        created_by=user_id,
+        status="active",
+        created_at=datetime.utcnow()
+    )
+    db.add(room)
+    
+    # Add Member
+    member = RoomMember(
+        id=str(uuid4()),
+        room_id=room_id,
+        user_id=user_id,
+        display_name=user.display_name,
+        role="owner",
+        joined_at=datetime.utcnow()
+    )
+    db.add(member)
+    
+    # 3. Create Active Session
+    session_id = f"ls_{rand_suffix}"
     live_session = RoomLiveSession(
         id=session_id,
-        room_id=room.id,
-        title=f"Debug Session - {user.display_name}",
+        room_id=room_id,
+        title=f"Live Session {rand_suffix}",
         status="active",
-        started_by=current_user_id,
+        started_by=user_id,
         started_at=datetime.utcnow()
     )
     db.add(live_session)
     
-    # Optional: We could also automatically join the user to this session as a member record
-    # (Optional, but helps with some logic)
-    
     await db.commit()
+    
+    # 4. Generate Token
+    access_token = create_access_token(data={"sub": user_id})
+    
+    # 5. Prepare Output
+    from app.core.config import settings
+    # If host is 0.0.0.0, we probably want to show localhost or specific IP for testing
+    # But for now let's respect the settings or fallback to a sensible default 
+    # For Docker local dev, 10.0.255.80 seems to be the user's specific IP, 
+    # but we can try to use what's in settings if possible, or keep it generic.
+    
+    # Ideally, we should detect the request host, but here we are in a background task context potentially.
+    # Let's use the explicit request from user if available, or settings.
+    # Since we can't easily get request obj here without adding it to params, let's use the env settings.
+    
+    host = settings.api_host if settings.api_host != "0.0.0.0" else "10.0.255.80"
+    ws_url = f"ws://{host}:{settings.api_port}/meeting/{session_id}?token={access_token}"
+    
+    # PowerShell Script for instant testing
+    ps_script = f"""
+$url = "{ws_url}"
+$ws = New-Object System.Net.WebSockets.ClientWebSocket
+$ct = New-Object System.Threading.CancellationToken
+$ws.ConnectAsync($url, $ct).Wait()
+Write-Host "✅ Connected to {session_id}" -ForegroundColor Green
+$buffer = New-Object byte[] 4096
+while ($ws.State -eq 'Open') {{
+    $res = $ws.ReceiveAsync(new-object System.ArraySegment[byte]($buffer), $ct)
+    $res.Wait()
+    $msg = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $res.Result.Count)
+    Write-Host "📩 $msg" -ForegroundColor Cyan
+}}
+"""
 
     return {
-        "message": "Debug session setup successful",
-        "user_id": current_user_id,
-        "room_id": room.id,
-        "session_id": session_id
+        "message": "All-in-one setup complete!",
+        "user_id": user_id,
+        "session_id": session_id,
+        "token": access_token,
+        "ws_url": ws_url,
+        "powershell_script": ps_script
     }
