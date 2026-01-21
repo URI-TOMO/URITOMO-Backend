@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
+from app.core.errors import AppError
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
@@ -46,10 +46,8 @@ async def start_live_session(
         
         if not user:
              # Should practically not happen if token is valid
-             return JSONResponse(
-                status_code=401,
-                content={"status": "40102", "message": "Unauthorized"}
-            )
+             # Should practically not happen if token is valid
+             raise AppError(status_code=401, code="40102", message="Unauthorized")
 
         # 2. Check Room and Membership
         # We need to verify if the room exists AND if the user is a member.
@@ -60,10 +58,7 @@ async def start_live_session(
         room = room_result.scalar_one_or_none()
         
         if not room:
-             return JSONResponse(
-                status_code=404,
-                content={"status": "40401", "message": "Room not found or not a member"}
-            )
+             raise AppError(status_code=404, code="40401", message="Room not found or not a member")
 
         # Check Membership
         member_result = await session.execute(
@@ -75,10 +70,7 @@ async def start_live_session(
         member = member_result.scalar_one_or_none()
         
         if not member:
-             return JSONResponse(
-                status_code=404,
-                content={"status": "40401", "message": "Room not found or not a member"}
-            )
+             raise AppError(status_code=404, code="40401", message="Room not found or not a member")
 
         # 3. Create Live Session
         session_id = f"ls_{uuid.uuid4().hex[:16]}" # Example format, matching ls_001 style broadly or just uuid
@@ -115,10 +107,9 @@ async def start_live_session(
             }
         )
 
+    except AppError:
+        raise
     except Exception as e:
         # Log generic error?
         print(f"Error starting live session: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"status": "50001", "message": "Internal server error"}
-        )
+        raise AppError(status_code=500, code="50001", message="Internal server error")
