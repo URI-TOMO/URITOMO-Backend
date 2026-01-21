@@ -15,8 +15,7 @@ from app.models.user import User
 
 router = APIRouter(prefix="/meeting", tags=["meeting"])
 
-class CreateLiveSessionRequest(BaseModel):
-    title: Optional[str] = None
+
 
 class LiveSessionSchema(BaseModel):
     id: str
@@ -34,7 +33,6 @@ class SuccessResponse(BaseModel):
 @router.post("/{room_id}/live-sessions", response_model=SuccessResponse)
 async def start_live_session(
     room_id: str,
-    request: CreateLiveSessionRequest,
     current_user_id: CurrentUserDep,
     session: SessionDep
 ):
@@ -76,7 +74,7 @@ async def start_live_session(
         session_id = f"ls_{uuid.uuid4().hex[:16]}" # Example format, matching ls_001 style broadly or just uuid
         # User example: ls_001. I'll use a standard ID generation or just uuid.
         
-        session_title = request.title if request.title else user.display_name
+        session_title = user.display_name
         
         new_session = RoomLiveSession(
             id=session_id,
