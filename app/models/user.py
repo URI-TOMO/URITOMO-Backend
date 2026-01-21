@@ -19,6 +19,7 @@ class User(Base, TimestampMixin):
     email: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True)
     display_name: Mapped[str] = mapped_column(String(128), nullable=False)
     locale: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    hashed_password: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
 
     # Relationships
