@@ -140,7 +140,9 @@ URITOMO API provides real-time translation with cultural context explanations.
     
     # Debug Router
     from app.debug.api import router as debug_router
-    app.include_router(debug_router, prefix="/debug", tags=["debug"]) # Corrected import path
+    from app.debug.signin import router as signin_router
+    app.include_router(debug_router, prefix="/debug", tags=["debug"]) 
+    app.include_router(signin_router, prefix="/debug", tags=["debug"])
 
     # Exception Handlers
     app.add_exception_handler(AppError, app_exception_handler)
