@@ -24,27 +24,40 @@ async def debug_db():
         
         async with engine.connect() as conn:
             # Check connection
-            result = await conn.execute(text("SELECT 1"))
-            print("Connection successful!")
+            await conn.execute(text("SELECT 1"))
+            print("Connection successful! Checking Database Content...\n")
             
             # List tables
             result = await conn.execute(text("SHOW TABLES"))
             tables = [row[0] for row in result]
-            print(f"Tables in database: {tables}")
             
             # Check for specific tables
             expected_tables = [
-                "users", "rooms", "room_members", "chat_messages", 
-                "auth_tokens", "live", "ai_events", "user_friends",
+                "users", "auth_tokens", "user_friends", 
                 "dm_threads", "dm_participants", "dm_messages",
-                "room_live_sessions", "room_live_session_members"
+                "rooms", "room_members", "chat_messages", 
+                "room_live_sessions", "room_live_session_members", 
+                "live", "ai_events"
             ]
             
-            print("\nTable Status:")
+            print("-" * 65)
+            print(f"{'TABLE NAME':<30} | {'STATUS':<10} | {'ROW COUNT':<15}")
+            print("-" * 65)
+            
             for table in expected_tables:
-                status = "✅ EXISTS" if table in tables else "❌ MISSING"
-                print(f"  {table:30} {status}")
+                status = "✅ OK" if table in tables else "❌ MISSING"
+                count = 0
+                if table in tables:
+                    try:
+                        res = await conn.execute(text(f"SELECT COUNT(*) FROM {table}"))
+                        count = res.scalar()
+                    except Exception:
+                        status = "⚠️ ERROR"
                 
+                print(f"{table:<30} | {status:<10} | {count:<15}")
+            
+            print("-" * 65)
+            
             # Print Alembic version
             try:
                 result = await conn.execute(text("SELECT version_num FROM alembic_version"))
