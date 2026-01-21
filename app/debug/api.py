@@ -19,10 +19,19 @@ from app.core.token import CurrentUserDep
 
 from app.debug.signin import router as signin_router
 from app.debug.session import router as session_router
+from app.meeting.ws.manager import manager
 
 router = APIRouter(tags=["debug"])
 router.include_router(signin_router)
 router.include_router(session_router)
+
+
+@router.get("/ws-stats", status_code=status.HTTP_200_OK)
+async def get_ws_stats():
+    """
+    Get real-time statistics of all active WebSocket connections.
+    """
+    return manager.get_stats()
 
 FIXED_USERS = [
     {"id": "1", "display_name": "Jin", "email": "jin@example.com", "locale": "ko"},
