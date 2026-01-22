@@ -17,9 +17,8 @@ import asyncio
 import json
 from datetime import datetime
 
-from app.core.deps import get_db, get_current_user
-from app.models.user import User
-from app.models.message import Message
+from app.core.deps import get_db, get_current_user_id
+from app.models.message_personal import Message
 
 router = APIRouter(prefix="/chat", tags=["personal_chat"])
 
@@ -215,7 +214,7 @@ async def websocket_endpoint(
 @router.get("/history/{target_user_id}")
 async def get_chat_history(
     target_user_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
     limit: int = Query(50, ge=1, le=100)
 ):
@@ -227,11 +226,11 @@ async def get_chat_history(
     """
     messages = db.query(Message).filter(
         (
-            (Message.sender_id == current_user.id) & 
+            (Message.sender_id == int(current_user_id)) & 
             (Message.receiver_id == target_user_id)
         ) | (
             (Message.sender_id == target_user_id) & 
-            (Message.receiver_id == current_user.id)
+            (Message.receiver_id == int(current_user_id))
         )
     ).order_by(Message.created_at.desc()).limit(limit).all()
     
@@ -251,7 +250,7 @@ async def get_chat_history(
 @router.post("/read/{from_user_id}")
 async def mark_messages_as_read(
     from_user_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db)
 ):
     """
@@ -262,7 +261,7 @@ async def mark_messages_as_read(
     """
     updated = db.query(Message).filter(
         Message.sender_id == from_user_id,
-        Message.receiver_id == current_user.id,
+        Message.receiver_id == int(current_user_id),
         Message.is_read == False
     ).update({"is_read": True})
     
@@ -276,7 +275,7 @@ async def mark_messages_as_read(
 
 @router.get("/unread/count")
 async def get_unread_count(
-    current_user: User = Depends(get_current_user),
+    current_user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db)
 ):
     """
@@ -289,7 +288,7 @@ async def get_unread_count(
         Message.sender_id,
         db.func.count(Message.id).label("count")
     ).filter(
-        Message.receiver_id == current_user.id,
+        Message.receiver_id == int(current_user_id),
         Message.is_read == False
     ).group_by(Message.sender_id).all()
     
