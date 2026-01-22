@@ -122,3 +122,62 @@ async def all_in_one_debug_setup(
         "ws_url": ws_url,
         "powershell_script": ps_script
     }
+
+from pydantic import BaseModel
+from app.core.token import verify_token
+from fastapi import HTTPException
+
+class JoinSessionRequest(BaseModel):
+    token: str
+    session_id: str
+
+@router.post("/join-session", status_code=status.HTTP_200_OK)
+async def debug_join_session(
+    req: JoinSessionRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    **Debug: Join Session Manually**
+    
+    Forces an existing user (via token) to join an existing session's room.
+    Useful when you have a token and a session_id and want to connect WS.
+    """
+    # 1. Verify Token
+    user_id = verify_token(req.token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+        
+    # 2. Find Session -> Room
+    stmt = select(RoomLiveSession).where(RoomLiveSession.id == req.session_id)
+    result = await db.execute(stmt)
+    live_session = result.scalar_one_or_none()
+    
+    if not live_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    room_id = live_session.room_id
+    
+    # 3. Check if Member exists
+    stmt_member = select(RoomMember).where(
+        RoomMember.room_id == room_id,
+        RoomMember.user_id == user_id
+    )
+    result_member = await db.execute(stmt_member)
+    member = result_member.scalar_one_or_none()
+    
+    if not member:
+        # Add to room
+        user = await db.get(User, user_id)
+        new_member = RoomMember(
+            id=str(uuid4()),
+            room_id=room_id,
+            user_id=user_id,
+            display_name=user.display_name if user else "Unknown",
+            role="member",
+            joined_at=datetime.utcnow()
+        )
+        db.add(new_member)
+        await db.commit()
+        return {"message": f"User {user_id} added to room {room_id} and ready to join session {req.session_id}"}
+    
+    return {"message": f"User {user_id} is already a member of room {room_id}"}
