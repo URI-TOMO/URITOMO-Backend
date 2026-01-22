@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     # Google OAuth
     google_client_id: Optional[str] = None
     google_client_secret: Optional[str] = None
+    
+    # Testing
+    enable_test_auth: bool = True  # Allow test tokens in development
 
     # External APIs
     openai_api_key: Optional[str] = None

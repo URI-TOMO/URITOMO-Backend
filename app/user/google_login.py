@@ -14,6 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from google.auth.transport import requests
 from google.oauth2 import id_token
+from jose import jwt
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -126,8 +127,43 @@ class GoogleAuthService:
     def verify_google_token(token: str) -> GoogleUserInfo:
         """Verify Google ID token and return user info"""
         try:
-            # Verify the token
-            # Note: GOOGLE_CLIENT_ID must be set in settings
+            # For development/testing: try JWT decode first
+            print(f"[DEBUG] verify_google_token called")
+            print(f"[DEBUG] enable_test_auth: {settings.enable_test_auth}")
+            print(f"[DEBUG] jwt_secret_key: {settings.jwt_secret_key[:10]}...{settings.jwt_secret_key[-5:]}")
+            print(f"[DEBUG] jwt_algorithm: {settings.jwt_algorithm}")
+            print(f"[DEBUG] token (first 50 chars): {token[:50]}...")
+            
+            if settings.enable_test_auth:
+                print(f"[DEBUG] Test auth enabled, attempting JWT decode")
+                try:
+                    payload = jwt.decode(
+                        token,
+                        settings.jwt_secret_key,
+                        algorithms=[settings.jwt_algorithm]
+                    )
+                    print(f"[DEBUG] JWT decode successful!")
+                    print(f"[DEBUG] Payload: {payload}")
+                    # Any valid JWT in test mode with required fields is accepted
+                    if payload.get('sub') and payload.get('email'):
+                        print(f"[DEBUG] Creating GoogleUserInfo from JWT payload")
+                        return GoogleUserInfo(
+                            sub=payload.get('sub'),
+                            email=payload.get('email'),
+                            name=payload.get('name', 'Test User'),
+                            picture=payload.get('picture'),
+                            locale=payload.get('locale', 'en')
+                        )
+                except Exception as jwt_err:
+                    # Log the JWT decode error for debugging
+                    print(f"[DEBUG] JWT decode failed: {type(jwt_err).__name__}: {str(jwt_err)}")
+                    print(f"[DEBUG] Full error details:", jwt_err)
+                    import traceback
+                    traceback.print_exc()
+                    # Continue to Google verification if JWT decode fails
+                    pass
+            
+            # Production: Verify with real Google OAuth2
             google_client_id = getattr(settings, 'google_client_id', None)
             if not google_client_id:
                 raise ValueError('GOOGLE_CLIENT_ID not configured in settings')
@@ -155,6 +191,11 @@ class GoogleAuthService:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=f"Invalid Google token: {str(e)}"
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Token verification failed: {type(e).__name__}: {str(e)}"
             )
 
 
