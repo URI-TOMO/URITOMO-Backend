@@ -10,7 +10,7 @@ from app.example.token.router import router as example_token_router
 from app.user.login import router as auth_router
 from app.api.user.main import router as main_router
 
-from app.meeting.api import router as meeting_router
+from app.meeting.sessions import router as meeting_router
 from app.meeting.ws.ws_base import router as meeting_ws_router
 from app.meeting.live_history import router as meeting_history_router
 
