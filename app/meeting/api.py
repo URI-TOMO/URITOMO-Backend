@@ -12,6 +12,8 @@ from app.core.deps import SessionDep
 from app.core.token import CurrentUserDep
 from app.models.room import Room, RoomLiveSession, RoomMember
 from app.models.user import User
+from app.models.message import ChatMessage
+from fastapi import Query
 
 router = APIRouter(prefix="/meeting", tags=["meeting"])
 
@@ -111,3 +113,5 @@ async def start_live_session(
         # Log generic error?
         print(f"Error starting live session: {e}")
         raise AppError(status_code=500, code="50001", message="Internal server error")
+
+

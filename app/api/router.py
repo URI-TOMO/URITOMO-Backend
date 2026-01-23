@@ -12,6 +12,7 @@ from app.api.user.main import router as main_router
 
 from app.meeting.api import router as meeting_router
 from app.meeting.ws.ws_base import router as meeting_ws_router
+from app.meeting.live_history import router as meeting_history_router
 
 from app.core.token import security_scheme
 
@@ -26,6 +27,7 @@ api_router.include_router(debug_router, prefix="/debug")
 api_router.include_router(example_token_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(main_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(meeting_router, dependencies=[Depends(security_scheme)])
+api_router.include_router(meeting_history_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(meeting_ws_router)
 
 # 3. Summary Routes (Protected)
