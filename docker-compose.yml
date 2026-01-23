@@ -127,6 +127,9 @@ services:
       TRANSLATION_PROVIDER: ${TRANSLATION_PROVIDER:-MOCK}
       DEFAULT_SOURCE_LANG: ${DEFAULT_SOURCE_LANG:-ja}
       DEFAULT_TARGET_LANG: ${DEFAULT_TARGET_LANG:-ko}
+      
+      # CORS
+      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:3000"]}
     depends_on:
       mysql:
         condition: service_healthy
