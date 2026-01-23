@@ -12,10 +12,10 @@ def generate_meeting_data(num_messages=1000):
     room_title = "プロジェクトX 進捗会議 (大容量テストデータ)"
     
     users = [
-        {"name": "田中", "role": "PM"},
-        {"name": "佐藤", "role": "Dev"},
-        {"name": "鈴木", "role": "Designer"},
-        {"name": "伊藤", "role": "QA"},
+        {"name": "田中"},
+        {"name": "佐藤"},
+        {"name": "鈴木"},
+        {"name": "伊藤"},
     ]
     
     phrases = [
