@@ -80,6 +80,14 @@ def setup_logging() -> None:
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
+    # Specific logger for WebSocket (Force visible on console)
+    ws_logger = logging.getLogger("uritomo.ws")
+    ws_logger.setLevel(logging.INFO)
+    ws_handler = logging.StreamHandler(sys.stdout)
+    ws_handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))
+    ws_logger.addHandler(ws_handler)
+    ws_logger.propagate = False  # Prevent double logging
+
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     """Get a logger instance"""

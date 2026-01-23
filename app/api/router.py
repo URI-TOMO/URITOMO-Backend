@@ -11,6 +11,7 @@ from app.user.login import router as auth_router
 from app.api.user.main import router as main_router
 
 from app.meeting.api import router as meeting_router
+from app.meeting.ws.ws_base import router as meeting_ws_router
 
 from app.core.token import security_scheme
 
@@ -25,6 +26,21 @@ api_router.include_router(debug_router, prefix="/debug")
 api_router.include_router(example_token_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(main_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(meeting_router, dependencies=[Depends(security_scheme)])
+api_router.include_router(meeting_ws_router)
+
+# 3. Summary Routes (Protected)
+from app.api.summary.documents import router as summary_documents_router
+from app.api.summary.main import router as summary_main_router
+from app.api.summary.meeting_member import router as summary_member_router
+from app.api.summary.translation_log import router as summary_translation_log_router
+from app.api.summary.setup_mock import router as summary_setup_mock_router
+
+api_router.include_router(summary_documents_router, dependencies=[Depends(security_scheme)])
+api_router.include_router(summary_main_router, dependencies=[Depends(security_scheme)])
+api_router.include_router(summary_member_router, dependencies=[Depends(security_scheme)])
+api_router.include_router(summary_translation_log_router, dependencies=[Depends(security_scheme)])
+api_router.include_router(summary_setup_mock_router, dependencies=[Depends(security_scheme)])
+
 
 
 
