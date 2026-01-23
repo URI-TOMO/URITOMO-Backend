@@ -9,6 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
 
 from app.api.router import api_router
+# Import all models to ensure SQLAlchemy registry is fully initialized
+# This fixes the e3q8 error where models are not found in the registry during relationship resolution.
+from app.models import *
 
 from app.core.config import settings
 from app.core.errors import (
@@ -87,6 +90,10 @@ tags_metadata = [
     {
         "name": "health",
         "description": "System health check.",
+    },
+    {
+        "name": "summary",
+        "description": "Meeting summarization and minutes creation.",
     },
 ]
 

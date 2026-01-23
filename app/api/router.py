@@ -12,6 +12,8 @@ from app.api.user.main import router as main_router
 
 from app.meeting.api import router as meeting_router
 
+from app.api.v1.summary.router import summary_router
+
 from app.core.token import security_scheme
 
 api_router = APIRouter()
@@ -25,6 +27,9 @@ api_router.include_router(debug_router, prefix="/debug")
 api_router.include_router(example_token_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(main_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(meeting_router, dependencies=[Depends(security_scheme)])
+
+# Summary Routes
+api_router.include_router(summary_router)
 
 
 
