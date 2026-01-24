@@ -55,6 +55,12 @@ pytz = "^2024.1"
 # Logging & Monitoring
 structlog = "^24.1.0"
 python-json-logger = "^2.0.7"
+# Machine Learning & VAD
+torch = "^2.2.0"
+torchaudio = "^2.2.0"
+numpy = "^1.26.0"
+livekit-server-sdk = "^0.6.0"
+
 sentry-sdk = {extras = ["fastapi"], version = "^1.39.2"}
 
 [tool.poetry.group.dev.dependencies]
