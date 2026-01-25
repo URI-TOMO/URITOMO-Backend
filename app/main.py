@@ -56,29 +56,12 @@ tags_metadata = [
         "description": "Debug tools for seeding data and testing.",
     },
     {
-        "name": "Example Token Auth",
-        "description": "Tokens for testing authentication. Get your debug token here!",
-    },
-    {
-        "name": "Example CRUD",
-        "description": "Quickly setup users and mock data for development.",
-    },
-    {
         "name": "auth",
         "description": "Standard Authentication operations (Login, Register).",
-    },
-
-    {
-        "name": "orgs",
-        "description": "Manage Organizations and their glossaries.",
     },
     {
         "name": "meetings",
         "description": "Create and manage translation meetings.",
-    },
-    {
-        "name": "segments",
-        "description": "Ingest and process transcript segments.",
     },
     {
         "name": "websocket",

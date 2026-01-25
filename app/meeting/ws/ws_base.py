@@ -12,31 +12,7 @@ from app.meeting.ws.ws_message import handle_chat_message
 
 from app.infra.db import AsyncSessionLocal
 
-router = APIRouter(prefix="/meeting", tags=["meeting_ws"])
-
-@router.get("/ws-info", include_in_schema=True)
-async def websocket_docs():
-    """
-    Returns documentation on how to connect to the meeting WebSocket.
-    """
-    return {
-        "websocket_url": "/api/v1/meeting/{session_id}",
-        "auth": "pass token as query parameter ?token=...",
-        "message_formats": {
-            "incoming": {
-                "chat": {
-                    "type": "chat",
-                    "text": "Hello world",
-                    "lang": "ja"
-                }
-            },
-            "outgoing": {
-                "session_connected": "Sent on successful connection",
-                "chat": "Broadcasting chat message to all members",
-                "error": "Error details"
-            }
-        }
-    }
+router = APIRouter(prefix="/meeting", tags=["websocket"])
 
 @router.websocket("/{session_id}")
 async def meeting_websocket(
