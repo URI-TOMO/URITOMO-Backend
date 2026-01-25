@@ -14,14 +14,16 @@ from app.meeting.schemas import SuccessResponse
 
 router = APIRouter(prefix="/meeting", tags=["meetings"])
 
-@router.post("/{room_id}/live-sessions", response_model=SuccessResponse)
+@router.post("/{room_id}/live-sessions/{session_id}", response_model=SuccessResponse)
 async def start_live_session(
     room_id: str,
+    session_id: str,
     current_user_id: CurrentUserDep,
     session: SessionDep
 ):
     """
     새로운 라이브 세션을 생성합니다.
+    URL 경로에서 제공된 session_id를 사용합니다.
     생성자는 자동으로 첫 번째 참가자로 등록됩니다.
     """
     try:
@@ -51,61 +53,66 @@ async def start_live_session(
         if not member:
              raise AppError(status_code=403, code="40301", message="Not a member of this room")
 
-        # 3. Create Live Session
-        session_id = f"ls_{uuid.uuid4().hex[:16]}"
+        # 3. Create or Update Live Session using provided session_id
         session_title = user.display_name
         
-        new_session = RoomLiveSession(
-            id=session_id,
-            room_id=room_id,
-            title=session_title,
-            status="active",
-            started_by=current_user_id,
-            started_at=datetime.utcnow(),
-            ended_at=None
+        # Check if session already exists
+        session_result = await session.execute(select(RoomLiveSession).where(RoomLiveSession.id == session_id))
+        existing_session = session_result.scalar_one_or_none()
+        
+        if existing_session:
+            # Update existing session
+            existing_session.room_id = room_id
+            existing_session.title = session_title
+            existing_session.status = "active"
+            existing_session.started_by = current_user_id
+            existing_session.started_at = datetime.utcnow()
+            existing_session.ended_at = None
+        else:
+            # Create new session
+            new_session = RoomLiveSession(
+                id=session_id,
+                room_id=room_id,
+                title=session_title,
+                status="active",
+                started_by=current_user_id,
+                started_at=datetime.utcnow(),
+                ended_at=None
+            )
+            session.add(new_session)
+        
+        # 4. Add creator as participant if not already in the session
+        # Check if already joined
+        part_result = await session.execute(
+            select(RoomLiveSessionMember).where(
+                RoomLiveSessionMember.session_id == session_id,
+                RoomLiveSessionMember.user_id == current_user_id
+            )
         )
+        existing_member = part_result.scalar_one_or_none()
         
-        session.add(new_session)
+        if not existing_member:
+            participant_id = f"lsm_{uuid.uuid4().hex[:16]}"
+            session_member = RoomLiveSessionMember(
+                id=participant_id,
+                session_id=session_id,
+                room_id=room_id,
+                member_id=member.id,
+                user_id=current_user_id,
+                display_name=member.display_name,
+                role=member.role,
+                joined_at=datetime.utcnow(),
+                left_at=None
+            )
+            session.add(session_member)
+        else:
+            # Update existing member status if needed
+            existing_member.left_at = None
         
-        # 4. Add creator as first participant
-        participant_id = f"lsm_{uuid.uuid4().hex[:16]}"
-        session_member = RoomLiveSessionMember(
-            id=participant_id,
-            session_id=session_id,
-            room_id=room_id,
-            member_id=member.id,
-            user_id=current_user_id,
-            display_name=member.display_name,
-            role=member.role,
-            joined_at=datetime.utcnow(),
-            left_at=None
-        )
-        
-        session.add(session_member)
         await session.commit()
-        await session.refresh(new_session)
-        await session.refresh(session_member)
         
         return SuccessResponse(
-            status="success",
-            data={
-                "session": {
-                    "id": new_session.id,
-                    "room_id": new_session.room_id,
-                    "title": new_session.title,
-                    "status": new_session.status,
-                    "started_by": new_session.started_by,
-                    "started_at": new_session.started_at,
-                    "ended_at": new_session.ended_at
-                },
-                "participant": {
-                    "id": session_member.id,
-                    "member_id": session_member.member_id,
-                    "display_name": session_member.display_name,
-                    "role": session_member.role,
-                    "joined_at": session_member.joined_at
-                }
-            }
+            status="success"
         )
 
     except AppError:
