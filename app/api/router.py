@@ -43,6 +43,10 @@ api_router.include_router(summary_member_router, dependencies=[Depends(security_
 api_router.include_router(summary_translation_log_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(summary_setup_mock_router, dependencies=[Depends(security_scheme)])
 
+# 4. Translation Routes
+from app.translation.api import router as translation_router
+api_router.include_router(translation_router, prefix="/translation", dependencies=[Depends(security_scheme)])
+
 
 
 
