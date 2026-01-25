@@ -8,11 +8,41 @@ from sqlalchemy import select
 from app.core.token import verify_token
 from app.models.room import RoomLiveSession
 from app.meeting.ws.manager import manager
-from app.meeting.ws.ws_message import handle_chat_message
+from app.meeting.ws.ws_message import handle_chat_message, handle_stt_message
 
 from app.infra.db import AsyncSessionLocal
 
 router = APIRouter(prefix="/meeting", tags=["websocket"])
+
+@router.get("/ws-info", include_in_schema=True)
+async def websocket_docs():
+    """
+    Returns documentation on how to connect to the meeting WebSocket.
+    """
+    return {
+        "websocket_url": "/api/v1/meeting/{session_id}",
+        "auth": "pass token as query parameter ?token=...",
+        "message_formats": {
+            "incoming": {
+                "chat": {
+                    "type": "chat",
+                    "text": "Hello world",
+                    "lang": "ja"
+                },
+                "stt": {
+                    "type": "stt",
+                    "text": "transcribed text",
+                    "is_final": false,
+                    "lang": "ko"
+                }
+            },
+            "outgoing": {
+                "session_connected": "Sent on successful connection",
+                "chat": "Broadcasting chat message to all members",
+                "error": "Error details"
+            }
+        }
+    }
 
 @router.websocket("/{session_id}")
 async def meeting_websocket(
@@ -72,6 +102,15 @@ async def meeting_websocket(
                     continue
                 
                 await handle_chat_message(session_id, user_id, data)
+            
+            elif msg_type == "stt":
+                if not user_id:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Authentication required for STT"
+                    })
+                    continue
+                await handle_stt_message(session_id, user_id, data)
             
             elif msg_type == "ping":
                 await websocket.send_json({"type": "pong"})
