@@ -12,7 +12,7 @@ from app.models.room import Room, RoomLiveSession, RoomMember, RoomLiveSessionMe
 from app.models.user import User
 from app.meeting.schemas import SuccessResponse
 
-router = APIRouter(prefix="/meeting", tags=["meeting"])
+router = APIRouter(prefix="/meeting", tags=["meetings"])
 
 @router.post("/{room_id}/live-sessions", response_model=SuccessResponse)
 async def start_live_session(

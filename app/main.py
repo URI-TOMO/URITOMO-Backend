@@ -59,18 +59,9 @@ tags_metadata = [
         "name": "auth",
         "description": "Standard Authentication operations (Login, Register).",
     },
-
-    {
-        "name": "orgs",
-        "description": "Manage Organizations and their glossaries.",
-    },
     {
         "name": "meetings",
         "description": "Create and manage translation meetings.",
-    },
-    {
-        "name": "segments",
-        "description": "Ingest and process transcript segments.",
     },
     {
         "name": "websocket",

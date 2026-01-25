@@ -12,7 +12,7 @@ from app.meeting.ws.ws_message import handle_chat_message
 
 from app.infra.db import AsyncSessionLocal
 
-router = APIRouter(prefix="/meeting", tags=["meeting_ws"])
+router = APIRouter(prefix="/meeting", tags=["websocket"])
 
 @router.get("/ws-info", include_in_schema=True)
 async def websocket_docs():
