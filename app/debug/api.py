@@ -19,11 +19,15 @@ from app.core.token import CurrentUserDep
 
 from app.debug.signin import router as signin_router
 from app.debug.session import router as session_router
+from app.debug.for_live import router as for_live_router
+from app.debug.login import router as login_router
 from app.meeting.ws.manager import manager
 
 router = APIRouter(tags=["debug"])
 router.include_router(signin_router)
 router.include_router(session_router)
+router.include_router(for_live_router)
+router.include_router(login_router)
 
 
 @router.get("/ws-stats", status_code=status.HTTP_200_OK)

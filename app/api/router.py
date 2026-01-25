@@ -19,9 +19,9 @@ from app.core.token import security_scheme
 api_router = APIRouter()
 
 # 1. Routes that DON'T need authentication (Public/Debug)
+api_router.include_router(debug_router, prefix="/debug")
 api_router.include_router(auth_router)  # Includes real signup/login
 api_router.include_router(example_router) # Includes login-debug
-api_router.include_router(debug_router, prefix="/debug")
 
 # 2. Routes that DO need authentication (Protected)
 api_router.include_router(example_token_router, dependencies=[Depends(security_scheme)])
