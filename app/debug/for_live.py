@@ -81,7 +81,7 @@ async def generate_dense_live_data(
         friend = User(
             id=f_id,
             display_name=name,
-            email=f"{f_id}@uritomo.test",
+            email=f"{f_id}@uritomo.com",
             locale=loc,
             status="active",
             created_at=datetime.utcnow() - timedelta(days=60)
@@ -206,6 +206,7 @@ async def generate_dense_live_data(
             stats["chat_messages"] += 1
             
         # 4. 4 Live Sessions per room
+        live_seq = 0
         for s in range(4):
             session_id = str(uuid4())
             s_start = room.created_at + timedelta(days=s*5 + 2, hours=10)
@@ -241,12 +242,13 @@ async def generate_dense_live_data(
                 u_start = s_start + timedelta(seconds=u*30)
                 
                 live_text = f"Utterance #{u+1}: Speaking about important details of {title}..."
+                live_seq += 1
                 
                 live_item = Live(
                     id=u_id,
                     room_id=room_id,
                     member_id=speaker.id,
-                    seq=u+1,
+                    seq=live_seq,
                     text=live_text,
                     lang=id_to_locale.get(speaker.user_id, "en"),
                     start_ms=u*30000,
@@ -259,7 +261,7 @@ async def generate_dense_live_data(
                 db.add(AIEvent(
                     id=str(uuid4()),
                     room_id=room_id,
-                    seq=u+1,
+                    seq=live_seq,
                     event_type="translation",
                     source_live_id=u_id,
                     original_text=live_text,
