@@ -5,7 +5,7 @@ API v1 Router
 from fastapi import APIRouter, Depends
 
 from app.debug.api import router as debug_router
-from app.user.login import router as auth_router
+from app.api.user.login import router as auth_router
 from app.api.user.main import router as main_router
 
 from app.meeting.sessions import router as meeting_router
