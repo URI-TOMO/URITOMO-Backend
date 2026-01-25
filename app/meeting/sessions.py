@@ -15,33 +15,29 @@ from app.meeting.schemas import SuccessResponse
 router = APIRouter(prefix="/meeting", tags=["meetings"])
 
 @router.post("/{room_id}/live-sessions/{session_id}", response_model=SuccessResponse)
-async def start_live_session(
+async def enter_live_session(
     room_id: str,
     session_id: str,
     current_user_id: CurrentUserDep,
     session: SessionDep
 ):
     """
-    새로운 라이브 세션을 생성합니다.
-    URL 경로에서 제공된 session_id를 사용합니다.
-    생성자는 자동으로 첫 번째 참가자로 등록됩니다.
+    라이브 세션에 입장합니다 (생성 및 참가 통합).
+    세션이 존재하지 않으면 새로 생성하고, 존재하면 해당 세션에 참가합니다.
     """
     try:
-        # 1. Fetch User (for display_name)
+        # 1. Fetch User
         user_result = await session.execute(select(User).where(User.id == current_user_id))
         user = user_result.scalar_one_or_none()
-        
         if not user:
              raise AppError(status_code=401, code="40102", message="Unauthorized")
 
         # 2. Check Room and Membership
         room_result = await session.execute(select(Room).where(Room.id == room_id))
         room = room_result.scalar_one_or_none()
-        
         if not room:
              raise AppError(status_code=404, code="40401", message="Room not found")
 
-        # Check Membership
         member_result = await session.execute(
             select(RoomMember).where(
                 RoomMember.room_id == room_id,
@@ -49,40 +45,31 @@ async def start_live_session(
             )
         )
         member = member_result.scalar_one_or_none()
-        
         if not member:
              raise AppError(status_code=403, code="40301", message="Not a member of this room")
 
-        # 3. Create or Update Live Session using provided session_id
-        session_title = user.display_name
-        
-        # Check if session already exists
+        # 3. Create or Update Live Session
         session_result = await session.execute(select(RoomLiveSession).where(RoomLiveSession.id == session_id))
-        existing_session = session_result.scalar_one_or_none()
+        live_session = session_result.scalar_one_or_none()
         
-        if existing_session:
-            # Update existing session
-            existing_session.room_id = room_id
-            existing_session.title = session_title
-            existing_session.status = "active"
-            existing_session.started_by = current_user_id
-            existing_session.started_at = datetime.utcnow()
-            existing_session.ended_at = None
-        else:
-            # Create new session
-            new_session = RoomLiveSession(
+        if not live_session:
+            # First person to enter creates the session
+            live_session = RoomLiveSession(
                 id=session_id,
                 room_id=room_id,
-                title=session_title,
+                title=f"{room.title} - Session",
                 status="active",
                 started_by=current_user_id,
                 started_at=datetime.utcnow(),
-                ended_at=None
             )
-            session.add(new_session)
-        
-        # 4. Add creator as participant if not already in the session
-        # Check if already joined
+            session.add(live_session)
+        else:
+            # If session exists but ended, reactivate it (optional, depends on policy)
+            if live_session.status != "active":
+                live_session.status = "active"
+                live_session.ended_at = None
+
+        # 4. Add or Update session member (Join)
         part_result = await session.execute(
             select(RoomLiveSessionMember).where(
                 RoomLiveSessionMember.session_id == session_id,
@@ -92,9 +79,8 @@ async def start_live_session(
         existing_member = part_result.scalar_one_or_none()
         
         if not existing_member:
-            participant_id = f"lsm_{uuid.uuid4().hex[:16]}"
             session_member = RoomLiveSessionMember(
-                id=participant_id,
+                id=f"lsm_{uuid.uuid4().hex[:16]}",
                 session_id=session_id,
                 room_id=room_id,
                 member_id=member.id,
@@ -102,130 +88,21 @@ async def start_live_session(
                 display_name=member.display_name,
                 role=member.role,
                 joined_at=datetime.utcnow(),
-                left_at=None
             )
             session.add(session_member)
         else:
-            # Update existing member status if needed
+            # Already a member (possibly left and coming back)
             existing_member.left_at = None
+            existing_member.joined_at = datetime.utcnow() # Update last join time
         
         await session.commit()
-        
-        return SuccessResponse(
-            status="success"
-        )
+        return SuccessResponse(status="success")
 
     except AppError:
         raise
     except Exception as e:
-        print(f"Error starting live session: {e}")
+        print(f"Error entering live session: {e}")
         raise AppError(status_code=500, code="50001", message="Internal server error")
-
-
-@router.post("/{room_id}/live-sessions/{session_id}/join", response_model=SuccessResponse)
-async def join_live_session(
-    room_id: str,
-    session_id: str,
-    current_user_id: CurrentUserDep,
-    session: SessionDep
-):
-    """
-    기존 활성 라이브 세션에 참가합니다.
-    """
-    try:
-        # 1. Fetch User
-        user_result = await session.execute(select(User).where(User.id == current_user_id))
-        user = user_result.scalar_one_or_none()
-        
-        if not user:
-             raise AppError(status_code=401, code="40102", message="Unauthorized")
-
-        # 2. Check Room Membership
-        member_result = await session.execute(
-            select(RoomMember).where(
-                RoomMember.room_id == room_id,
-                RoomMember.user_id == current_user_id
-            )
-        )
-        member = member_result.scalar_one_or_none()
-        
-        if not member:
-             raise AppError(status_code=403, code="40301", message="Not a member of this room")
-
-        # 3. Check Live Session exists and is active
-        live_session_result = await session.execute(
-            select(RoomLiveSession).where(
-                RoomLiveSession.id == session_id,
-                RoomLiveSession.room_id == room_id
-            )
-        )
-        live_session = live_session_result.scalar_one_or_none()
-        
-        if not live_session:
-             raise AppError(status_code=404, code="40402", message="Live session not found")
-        
-        if live_session.status != "active":
-             raise AppError(status_code=400, code="40001", message="Live session is not active")
-
-        # 4. Check if already joined (and not left)
-        existing_participant_result = await session.execute(
-            select(RoomLiveSessionMember).where(
-                and_(
-                    RoomLiveSessionMember.session_id == session_id,
-                    RoomLiveSessionMember.member_id == member.id,
-                    RoomLiveSessionMember.left_at.is_(None)
-                )
-            )
-        )
-        existing_participant = existing_participant_result.scalar_one_or_none()
-        
-        if existing_participant:
-            # Already in session, return existing participation
-            return SuccessResponse(
-                status="success",
-                data={
-                    "message": "Already joined",
-                    "participant": {
-                        "id": existing_participant.id,
-                        "member_id": existing_participant.member_id,
-                        "display_name": existing_participant.display_name,
-                        "role": existing_participant.role,
-                        "joined_at": existing_participant.joined_at
-                    }
-                }
-            )
-
-        # 5. Add as participant
-        participant_id = f"lsm_{uuid.uuid4().hex[:16]}"
-        session_member = RoomLiveSessionMember(
-            id=participant_id,
-            session_id=session_id,
-            room_id=room_id,
-            member_id=member.id,
-            user_id=current_user_id,
-            display_name=member.display_name,
-            role=member.role,
-            joined_at=datetime.utcnow(),
-            left_at=None
-        )
-        
-        session.add(session_member)
-        await session.commit()
-        await session.refresh(session_member)
-        
-        return SuccessResponse(
-            status="success",
-            data={
-                "message": "Joined successfully",
-                "participant": {
-                    "id": session_member.id,
-                    "member_id": session_member.member_id,
-                    "display_name": session_member.display_name,
-                    "role": session_member.role,
-                    "joined_at": session_member.joined_at
-                }
-            }
-        )
 
     except AppError:
         raise
