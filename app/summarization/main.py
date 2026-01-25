@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from app.infra.db import get_db
 from app.models.room import Room, RoomMember
 from .logic.meeting_data import fetch_meeting_transcript, format_transcript_for_ai
-from .logic.ai_summary import summarize_meeting
+from .logic.ai_summary import summarize_meeting, save_summary_to_db, get_summary_from_db
 import re
 import os
 import json
@@ -61,6 +61,7 @@ async def get_summarization(
 ):
     """
     会議の要約、会議情報、および全発言ログを取得します（議事録作成）。
+    キャッシング機能付き：既に要約がDBに保存されている場合は再利用します。
     """
     # 1. 会議室の存在確認
     room_stmt = select(Room).where(Room.id == room_id)
@@ -98,19 +99,40 @@ async def get_summarization(
                 text=entry["what"]
             ))
 
-    # 5. 会議要約の取得
-    # DBからは取得せず、常にAIで生成（または必要に応じて他のロジック）
-    if transcript:
-        # AIによる要約生成
-        formatted_text = format_transcript_for_ai(transcript)
-        summary_dict = await summarize_meeting(formatted_text)
-        meeting_date_str = room.created_at.strftime("%Y-%m-%d")
+    # 5. 要約の取得またはAIによる生成
+    summary_dict = None
+    db_summary = await get_summary_from_db(room_id, db)
+    
+    if db_summary:
+        # DBにキャッシュされた要約が存在する場合はそれを使用
+        print(f"Using cached summary for room {room_id}")
+        summary_data = db_summary.get("meta", {}).get("summary", {})
+        if summary_data:
+            summary_dict = summary_data
+    
+    if not summary_dict:
+        # キャッシュがない場合、AIで新たに生成
+        if transcript:
+            formatted_text = format_transcript_for_ai(transcript)
+            summary_dict = await summarize_meeting(formatted_text)
+            meeting_date_str = room.created_at.strftime("%Y-%m-%d")
+            
+            # 生成した要約をDBに保存
+            summary_data_to_save = {
+                "room_title": room.title,
+                "processed_at": datetime.utcnow().isoformat(),
+                "filtered_message_count": len(transcript),
+                "summary": summary_dict
+            }
+            await save_summary_to_db(room_id, summary_data_to_save, db)
+        else:
+            summary_dict = {
+                "main_point": "No transcript found.",
+                "task": "N/A",
+                "decided": "N/A"
+            }
+            meeting_date_str = room.created_at.strftime("%Y-%m-%d")
     else:
-        summary_dict = {
-            "main_point": "No transcript found.",
-            "task": "N/A",
-            "decided": "N/A"
-        }
         meeting_date_str = room.created_at.strftime("%Y-%m-%d")
 
     return SummarizationResponse(

@@ -14,11 +14,11 @@ from app.user.login import router as auth_router
 from app.meeting.api import router as meeting_router
 
 from app.core.token import security_scheme
-from app.api.v1.summary.documents import router as summary_documents_router
-from app.api.v1.summary.main import router as summary_main_router
-from app.api.v1.summary.meeting_member import router as summary_member_router
-from app.api.v1.summary.translation_log import router as summary_translation_log_router
-from app.api.v1.summary.setup_mock import router as summary_setup_mock_router
+from app.summarization.documents import router as summary_documents_router
+from app.summarization.main import router as summary_main_router
+from app.summarization.meeting_member import router as summary_member_router
+from app.summarization.translation_log import router as summary_translation_log_router
+from app.summarization.setup_mock import router as summary_setup_mock_router
 
 
 

@@ -12,7 +12,7 @@ from app.api.user.main import router as main_router
 
 from app.meeting.api import router as meeting_router
 
-from app.api.v1.summary.router import summary_router
+from app.summarization.router import summary_router
 
 from app.core.token import security_scheme
 

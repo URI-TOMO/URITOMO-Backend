@@ -8,11 +8,13 @@ from typing import List, Dict, Any
 async def fetch_meeting_transcript(db: AsyncSession, room_id: str) -> List[Dict[str, Any]]:
     """
     指定された会議室の全チャットメッセージを取得し、リスト形式で返します。
+    AI要約に不要なシステムメッセージやAIメッセージはフィルタリングします。
     """
     stmt = (
         select(ChatMessage)
         .options(selectinload(ChatMessage.sender_member))
         .where(ChatMessage.room_id == room_id)
+        .where(ChatMessage.sender_type == "human")  # 人間の発言のみ
         .order_by(ChatMessage.created_at)
     )
     result = await db.execute(stmt)
@@ -24,7 +26,9 @@ async def fetch_meeting_transcript(db: AsyncSession, room_id: str) -> List[Dict[
         transcript.append({
             "who": sender_name,
             "what": msg.text,
-            "when": msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            "when": msg.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "message_type": msg.message_type,  # text, translation, notice等
+            "original_msg_id": msg.id  # 元のメッセージIDを保持
         })
     return transcript
 
