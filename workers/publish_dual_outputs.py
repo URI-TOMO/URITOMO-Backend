@@ -413,6 +413,9 @@ async def connect_room(
         print(f"[ROOM] participant_disconnected room_id={room_id} identity={participant.identity}")
         if state.router:
             state.router.schedule_recompute("participant_disconnected")
+        if len(room.remote_participants) == 0:
+            print(f"[ROOM] no participants left, disconnecting room_id={room_id}")
+            asyncio.create_task(disconnect_room(room_id, rooms))
 
     @room.on("participant_attributes_changed")
     def _on_participant_attributes_changed(
