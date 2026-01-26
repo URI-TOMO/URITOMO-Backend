@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from app.debug.api import router as debug_router
 from app.api.user.login import router as auth_router
 from app.api.user.main import router as main_router
+from app.api.user.friends import router as friends_router
 
 from app.meeting.sessions import router as meeting_router
 from app.meeting.ws.ws_base import router as meeting_ws_router
@@ -22,6 +23,7 @@ api_router.include_router(auth_router)  # Includes real signup/login
 
 # 2. Routes that DO need authentication (Protected)
 api_router.include_router(main_router, dependencies=[Depends(security_scheme)])
+api_router.include_router(friends_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(meeting_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(meeting_history_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(meeting_ws_router)

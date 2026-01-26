@@ -22,7 +22,7 @@ fi
 
 echo -e "${GREEN}✅ Containers are up and running.${NC}"
 
-# 2. Determine LAN IP for display (best-effort on macOS)
+# 2. Run Database Migrations
 LAN_IP=""
 if command -v ipconfig >/dev/null 2>&1; then
     LAN_IP=$(ipconfig getifaddr en0 2>/dev/null)
