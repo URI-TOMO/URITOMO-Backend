@@ -106,6 +106,7 @@ class Settings(BaseSettings):
     worker_queues: list[str] = ["default", "high", "low"]
     worker_result_ttl: int = 3600
     worker_job_timeout: int = 600
+    worker_service_key: Optional[str] = None
 
     # CORS
     cors_origins: list[str] = [

@@ -3,14 +3,16 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
+from redis.asyncio import Redis
 
-from app.core.deps import SessionDep
+from app.core.deps import SessionDep, RedisDep
 from app.core.token import CurrentUserDep
 from app.core.errors import AppError
 from app.models.room import Room, RoomLiveSession, RoomMember, RoomLiveSessionMember
 from app.models.user import User
 from app.meeting.schemas import SuccessResponse
+from app.meeting.livekit.events import publish_room_event
 
 router = APIRouter(prefix="/meeting", tags=["meetings"])
 
@@ -19,7 +21,8 @@ async def enter_live_session(
     room_id: str,
     session_id: str,
     current_user_id: CurrentUserDep,
-    session: SessionDep
+    session: SessionDep,
+    redis: RedisDep,
 ):
     """
     라이브 세션에 입장합니다 (생성 및 참가 통합).
@@ -96,6 +99,26 @@ async def enter_live_session(
             existing_member.joined_at = datetime.utcnow() # Update last join time
         
         await session.commit()
+
+        # 5. If first active participant, signal worker to join
+        active_count_result = await session.execute(
+            select(func.count())
+            .select_from(RoomLiveSessionMember)
+            .where(
+                RoomLiveSessionMember.session_id == session_id,
+                RoomLiveSessionMember.left_at.is_(None),
+            )
+        )
+        active_count = active_count_result.scalar_one()
+        if active_count == 1:
+            await publish_room_event(
+                redis,
+                action="join",
+                room_id=room_id,
+                session_id=session_id,
+                user_id=current_user_id,
+            )
+
         return SuccessResponse(status="success")
 
     except AppError:
@@ -116,7 +139,8 @@ async def leave_live_session(
     room_id: str,
     session_id: str,
     current_user_id: CurrentUserDep,
-    session: SessionDep
+    session: SessionDep,
+    redis: RedisDep,
 ):
     """
     현재 참가 중인 라이브 세션에서 나갑니다.
@@ -153,6 +177,25 @@ async def leave_live_session(
         participant.left_at = datetime.utcnow()
         await session.commit()
         await session.refresh(participant)
+
+        # 4. If no active participants, signal worker to leave
+        active_count_result = await session.execute(
+            select(func.count())
+            .select_from(RoomLiveSessionMember)
+            .where(
+                RoomLiveSessionMember.session_id == session_id,
+                RoomLiveSessionMember.left_at.is_(None),
+            )
+        )
+        active_count = active_count_result.scalar_one()
+        if active_count == 0:
+            await publish_room_event(
+                redis,
+                action="leave",
+                room_id=room_id,
+                session_id=session_id,
+                user_id=current_user_id,
+            )
         
         return SuccessResponse(
             status="success",
