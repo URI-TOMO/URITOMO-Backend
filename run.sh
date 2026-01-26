@@ -22,8 +22,20 @@ fi
 
 echo -e "${GREEN}✅ Containers are up and running.${NC}"
 
-# 2. Determine LAN IP for display (best-effort on macOS)
-LAN_IP="10.0.255.246"
+# 2. Run Database Migrations
+LAN_IP=""
+if command -v ipconfig >/dev/null 2>&1; then
+    LAN_IP=$(ipconfig getifaddr en0 2>/dev/null)
+    if [ -z "$LAN_IP" ]; then
+        LAN_IP=$(ipconfig getifaddr en1 2>/dev/null)
+    fi
+fi
+if [ -z "$LAN_IP" ] && command -v hostname >/dev/null 2>&1; then
+    LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+fi
+if [ -z "$LAN_IP" ] && command -v ifconfig >/dev/null 2>&1; then
+    LAN_IP=$(ifconfig 2>/dev/null | awk '/inet / && $2 != "127.0.0.1" {print $2; exit}')
+fi
 
 # 3. Run Database Migrations
 echo -e "${BLUE}🔄 Running database migrations...${NC}"
@@ -38,11 +50,11 @@ fi
 # 4. Final Status Information
 echo -e "\n${GREEN}==============================================${NC}"
 echo -e "${GREEN}✨ URITOMO Backend is ready!${NC}"
-echo -e "${BLUE}📍 API Base URL: ${NC} http://localhost:8007"
-echo -e "${BLUE}📍 API Specs:    ${NC} http://localhost:8007/docs"
+echo -e "${BLUE}📍 API Base URL: ${NC} http://localhost:8000"
+echo -e "${BLUE}📍 API Specs:    ${NC} http://localhost:8000/docs"
 if [ -n "$LAN_IP" ]; then
-    echo -e "${BLUE}🌐 LAN Base URL: ${NC} http://${LAN_IP}:8007"
-    echo -e "${BLUE}🌐 LAN Specs:    ${NC} http://${LAN_IP}:8007/docs"
+    echo -e "${BLUE}🌐 LAN Base URL: ${NC} http://${LAN_IP}:8000"
+    echo -e "${BLUE}🌐 LAN Specs:    ${NC} http://${LAN_IP}:8000/docs"
 else
     echo -e "${YELLOW}⚠️  LAN IP not detected. Check with: ${NC} ipconfig getifaddr en0"
 fi
