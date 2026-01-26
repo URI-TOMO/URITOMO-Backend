@@ -11,7 +11,7 @@ from app.models.user import User
 from app.core.token import CurrentUserDep
 from app.core.errors import AppError
 
-router = APIRouter(tags=["rooms"])
+router = APIRouter(tags=["main"])
 
 # ============ Schemas ============
 
