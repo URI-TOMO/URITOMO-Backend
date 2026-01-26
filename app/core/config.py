@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     deepl_api_key: Optional[str] = None
     deepl_api_url: str = "https://api-free.deepl.com/v2/translate"
 
+    # LiveKit
+    livekit_url: Optional[str] = None
+    livekit_api_key: Optional[str] = None
+    livekit_api_secret: Optional[str] = None
+
     # Translation Settings
     translation_provider: Literal["OPENAI", "DEEPL", "MOCK"] = "MOCK"
     default_source_lang: str = "ja"
