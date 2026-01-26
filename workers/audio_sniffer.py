@@ -25,6 +25,7 @@ class AuthState:
     worker_key: Optional[str]
     worker_id: str
     worker_ttl: int
+    force_relay: bool
 
 
 @dataclass
@@ -98,6 +99,31 @@ def normalize_service_auth(value: Optional[str]) -> Optional[str]:
     return value
 
 
+def build_room_options(auto_subscribe: bool, force_relay: bool) -> rtc.RoomOptions:
+    if not force_relay:
+        return rtc.RoomOptions(auto_subscribe=auto_subscribe)
+
+    rtc_config = None
+    ice_transport = None
+    if hasattr(rtc, "IceTransportType"):
+        ice_transport = getattr(rtc.IceTransportType, "TRANSPORT_RELAY", None)
+    if ice_transport is None and hasattr(rtc, "proto_room") and hasattr(rtc.proto_room, "IceTransportType"):
+        ice_transport = getattr(rtc.proto_room.IceTransportType, "TRANSPORT_RELAY", None)
+
+    if ice_transport is not None:
+        for key in ("ice_transport_type", "ice_transport_policy"):
+            try:
+                rtc_config = rtc.RtcConfiguration(**{key: ice_transport})
+                break
+            except TypeError:
+                rtc_config = None
+
+    if rtc_config is None:
+        rtc_config = rtc.RtcConfiguration()
+
+    return rtc.RoomOptions(auto_subscribe=auto_subscribe, rtc_config=rtc_config)
+
+
 async def ensure_service_auth(auth: AuthState, room_id: str) -> Optional[str]:
     if auth.service_auth:
         return auth.service_auth
@@ -152,7 +178,11 @@ async def fetch_livekit_token_with_retry(
 
 
 async def consume_audio(track: rtc.Track, *, label: str) -> None:
-    stream = rtc.AudioStream.from_track(track=track, sample_rate=48000, num_channels=1)
+    try:
+        stream = rtc.AudioStream.from_track(track=track, sample_rate=48000, num_channels=1)
+    except Exception:
+        # Fall back to constructor API for older/newer SDKs without from_track.
+        stream = rtc.AudioStream(track=track, sample_rate=48000, num_channels=1)
 
     frames = 0
     last_report = time.time()
@@ -240,9 +270,17 @@ async def connect_room(
             state.tasks.add(task)
             task.add_done_callback(state.tasks.discard)
 
-    opts = rtc.RoomOptions(auto_subscribe=auto_subscribe)
-    print(f"[BOOT] connecting room_id={room_id} auto_subscribe={auto_subscribe}")
-    await room.connect(token_resp.url, token_resp.token, options=opts)
+    opts = build_room_options(auto_subscribe=auto_subscribe, force_relay=auth.force_relay)
+    print(
+        f"[BOOT] connecting room_id={room_id} auto_subscribe={auto_subscribe} "
+        f"force_relay={auth.force_relay}"
+    )
+    try:
+        await room.connect(token_resp.url, token_resp.token, options=opts)
+    except Exception as exc:
+        rooms.pop(room_id, None)
+        print(f"[BOOT] connect failed room_id={room_id}: {exc!r}")
+        return
     print(f"[BOOT] connected. room_id={room_id} room={room.name}")
 
 
@@ -318,6 +356,8 @@ async def main() -> None:
     worker_ttl = int(os.getenv("WORKER_TOKEN_TTL_SECONDS", "0"))
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
     channel = os.getenv("LIVEKIT_ROOM_EVENTS_CHANNEL", "livekit:rooms")
+    force_relay_value = os.getenv("LIVEKIT_FORCE_RELAY", "false")
+    force_relay = force_relay_value.lower() in {"1", "true", "yes", "y", "on"}
 
     if not backend:
         raise RuntimeError("Missing backend. Provide --backend or env BACKEND_URL")
@@ -331,6 +371,7 @@ async def main() -> None:
         worker_key=worker_key,
         worker_id=worker_id,
         worker_ttl=worker_ttl,
+        force_relay=force_relay,
     )
 
     retry_seconds = float(os.getenv("TOKEN_FETCH_RETRY_SECONDS", "2"))

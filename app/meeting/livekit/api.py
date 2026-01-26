@@ -10,12 +10,14 @@ from livekit import api as lk_api
 from app.core.config import settings
 from app.core.deps import SessionDep, RedisDep
 from app.core.errors import AppError, NotFoundError, PermissionError
+from app.core.logging import get_logger
 from app.core.token import CurrentUserDep, decode_token
 from app.meeting.livekit.events import publish_room_event
 from app.models.room import Room, RoomMember
 from app.models.user import User
 
 router = APIRouter(prefix="/meeting/livekit", tags=["meetings"])
+logger = get_logger(__name__)
 
 
 class LiveKitTokenRequest(BaseModel):
@@ -34,6 +36,17 @@ def _require_livekit_env() -> None:
             status_code=500,
             code="LIVEKIT_CONFIG_MISSING",
         )
+
+
+def _normalize_lang(locale: Optional[str]) -> Optional[str]:
+    if not locale:
+        return None
+    lowered = locale.lower()
+    if lowered.startswith("ko"):
+        return "ko"
+    if lowered.startswith("ja"):
+        return "ja"
+    return None
 
 
 @router.post("/token", response_model=LiveKitTokenResponse)
@@ -66,6 +79,8 @@ async def create_livekit_token(
 
         display_name = payload.get("name") or "LiveKit Worker"
 
+        attributes = {"role": "worker"}
+
         grants = lk_api.VideoGrants(
             room_join=True,
             room=data.room_id,
@@ -80,7 +95,7 @@ async def create_livekit_token(
             .with_grants(grants)
             .with_ttl(timedelta(seconds=3600))
             .with_name(display_name)
-            .with_attributes({"role": "worker"})
+            .with_attributes(attributes)
         )
 
         jwt = token_builder.to_jwt()
@@ -110,24 +125,43 @@ async def create_livekit_token(
         can_publish_data=True,
     )
 
+    lang = _normalize_lang(user.locale)
+    attributes = {}
+    if lang:
+        attributes["lang"] = lang
+
     token_builder = (
         lk_api.AccessToken(settings.livekit_api_key, settings.livekit_api_secret)
         .with_identity(current_user_id)
         .with_grants(grants)
         .with_ttl(timedelta(seconds=3600))
         .with_name(member.display_name)
+        .with_attributes(attributes)
     )
-
-    if user.locale in {"ko", "ja"}:
-        token_builder = token_builder.with_attributes({"lang": user.locale})
 
     jwt = token_builder.to_jwt()
 
-    await publish_room_event(
-        redis,
-        action="join",
+    if not is_worker:
+        try:
+            await publish_room_event(
+                redis,
+                action="join",
+                room_id=data.room_id,
+                user_id=current_user_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "livekit.room_event.publish_failed",
+                room_id=data.room_id,
+                user_id=current_user_id,
+                error=str(exc),
+            )
+
+    logger.info(
+        "livekit.token.issued",
         room_id=data.room_id,
         user_id=current_user_id,
+        is_worker=is_worker,
     )
 
     return LiveKitTokenResponse(url=settings.livekit_url, token=jwt)
