@@ -18,6 +18,7 @@ class SignupRequest(BaseModel):
     name: str
     email: str
     password: str
+    lang: str
 
 class LoginRequest(BaseModel):
     email: str
@@ -50,6 +51,7 @@ async def signup(
         id=str(uuid4()),
         email=data.email,
         display_name=data.name,
+        locale=data.lang,
         hashed_password=get_password_hash(data.password),
         status="active"
     )
