@@ -182,7 +182,10 @@ async def consume_audio(track: rtc.Track, *, label: str) -> None:
         stream = rtc.AudioStream.from_track(track=track, sample_rate=48000, num_channels=1)
     except Exception:
         # Fall back to constructor API for older/newer SDKs without from_track.
-        stream = rtc.AudioStream(track=track, sample_rate=48000, num_channels=1)
+        try:
+            stream = rtc.AudioStream(track=track, sample_rate=48000, num_channels=1)
+        except TypeError:
+            stream = rtc.AudioStream(track=track)
 
     frames = 0
     last_report = time.time()

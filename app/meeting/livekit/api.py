@@ -42,6 +42,10 @@ def _normalize_lang(locale: Optional[str]) -> Optional[str]:
     if not locale:
         return None
     lowered = locale.lower()
+    if lowered in {"kr", "kor", "korea"}:
+        return "ko"
+    if lowered in {"jp", "jpn", "japan"}:
+        return "ja"
     if lowered.startswith("ko"):
         return "ko"
     if lowered.startswith("ja"):

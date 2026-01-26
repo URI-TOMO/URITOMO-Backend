@@ -33,6 +33,9 @@ class AuthState:
 class RoomState:
     room: rtc.Room
     tasks: set[asyncio.Task] = field(default_factory=set)
+    router: Optional["LangRouter"] = None
+    ko_pub_sid: Optional[str] = None
+    ja_pub_sid: Optional[str] = None
 
 
 async def fetch_livekit_token(
@@ -241,7 +244,11 @@ async def play_beep(
         raise
 
 
-async def publish_output_track(room: rtc.Room, *, track_name: str) -> rtc.AudioSource:
+async def publish_output_track(
+    room: rtc.Room,
+    *,
+    track_name: str,
+) -> tuple[rtc.AudioSource, rtc.LocalTrackPublication]:
     sample_rate = 48000
     num_channels = 1
 
@@ -253,7 +260,109 @@ async def publish_output_track(room: rtc.Room, *, track_name: str) -> rtc.AudioS
 
     pub = await room.local_participant.publish_track(track, opts)
     print(f"[PUBLISH] track_name={track_name} sid={pub.sid}")
-    return source
+    return source, pub
+
+
+class LangRouter:
+    def __init__(
+        self,
+        room: rtc.Room,
+        *,
+        ko_sid: str,
+        ja_sid: str,
+        unknown_policy: str,
+    ) -> None:
+        self.room = room
+        self.ko_sid = ko_sid
+        self.ja_sid = ja_sid
+        self.unknown_policy = unknown_policy
+        self._lock = asyncio.Lock()
+        self._pending: Optional[asyncio.Task] = None
+
+    def schedule_recompute(self, reason: str) -> None:
+        if self._pending and not self._pending.done():
+            return
+        self._pending = asyncio.create_task(self._debounced_recompute(reason))
+
+    async def apply_now(self, reason: str) -> None:
+        async with self._lock:
+            self._apply_permissions(reason)
+
+    async def _debounced_recompute(self, reason: str) -> None:
+        await asyncio.sleep(0.15)
+        async with self._lock:
+            self._apply_permissions(reason)
+
+    def _allowed_for_lang(self, lang: Optional[str]) -> list[str]:
+        if lang == "ko":
+            return [self.ko_sid]
+        if lang == "ja":
+            return [self.ja_sid]
+        if self.unknown_policy == "ko":
+            return [self.ko_sid]
+        if self.unknown_policy == "none":
+            return []
+        return [self.ko_sid, self.ja_sid]
+
+    def _resolve_permission_class(self):
+        candidates = [
+            "ParticipantTrackPermission",
+            "participant.ParticipantTrackPermission",
+            "proto_room.ParticipantTrackPermission",
+        ]
+        for path in candidates:
+            obj = rtc
+            ok = True
+            for part in path.split("."):
+                if not hasattr(obj, part):
+                    ok = False
+                    break
+                obj = getattr(obj, part)
+            if ok:
+                return obj
+        return None
+
+    def _make_permission(self, identity: str, allowed: list[str]):
+        cls = self._resolve_permission_class()
+        if cls is None:
+            return {
+                "participant_identity": identity,
+                "allowed_track_sids": allowed,
+                "allow_all": False,
+                "all_tracks_allowed": False,
+            }
+        try:
+            return cls(
+                participant_identity=identity,
+                allow_all=False,
+                allowed_track_sids=allowed,
+            )
+        except TypeError:
+            return cls(
+                participant_identity=identity,
+                all_tracks_allowed=False,
+                allowed_track_sids=allowed,
+            )
+
+    def _apply_permissions(self, reason: str) -> None:
+        perms: list[rtc.ParticipantTrackPermission] = []
+        for participant in self.room.remote_participants.values():
+            lang = None
+            try:
+                lang = (participant.attributes or {}).get("lang")
+            except Exception:
+                lang = None
+            allowed = self._allowed_for_lang(lang)
+            perms.append(self._make_permission(participant.identity, allowed))
+
+        try:
+            self.room.local_participant.set_track_subscription_permissions(
+                allow_all_participants=False,
+                participant_permissions=perms,
+            )
+            print(f"[ROUTE] recompute ok reason={reason} participants={len(perms)}")
+        except Exception as exc:
+            print(f"[ROUTE] recompute failed reason={reason} error={exc!r}")
 
 
 async def maybe_await(result) -> None:
@@ -296,6 +405,26 @@ async def connect_room(
             f"room_id={room_id} identity={participant.identity} "
             f"name={participant.name} attrs={participant.attributes}"
         )
+        if state.router:
+            state.router.schedule_recompute("participant_connected")
+
+    @room.on("participant_disconnected")
+    def _on_participant_disconnected(participant: rtc.RemoteParticipant):
+        print(f"[ROOM] participant_disconnected room_id={room_id} identity={participant.identity}")
+        if state.router:
+            state.router.schedule_recompute("participant_disconnected")
+
+    @room.on("participant_attributes_changed")
+    def _on_participant_attributes_changed(
+        changed_attributes: dict,
+        participant: rtc.Participant,
+    ):
+        print(
+            "[ROOM] participant_attributes_changed "
+            f"room_id={room_id} identity={participant.identity} changed={changed_attributes}"
+        )
+        if state.router and ("lang" in changed_attributes):
+            state.router.schedule_recompute("participant_attributes_changed")
 
     opts = build_room_options(auto_subscribe=auto_subscribe, force_relay=auth.force_relay)
     print(
@@ -310,8 +439,8 @@ async def connect_room(
         return
     print(f"[BOOT] connected. room_id={room_id} room={room.name}")
 
-    ko_source = await publish_output_track(room, track_name=ko_track)
-    ja_source = await publish_output_track(room, track_name=ja_track)
+    ko_source, ko_pub = await publish_output_track(room, track_name=ko_track)
+    ja_source, ja_pub = await publish_output_track(room, track_name=ja_track)
 
     ko_pattern = [(800, 1200)]
     ja_pattern = [(200, 150), (200, 900)]
@@ -321,6 +450,16 @@ async def connect_room(
     ja_task = asyncio.create_task(
         play_beep(ja_source, freq_hz=ja_hz, label=f"JA({ja_hz}Hz)", pattern=ja_pattern)
     )
+    unknown_policy = os.getenv("LIVEKIT_UNKNOWN_LANG_POLICY", "none").lower()
+    if unknown_policy not in {"both", "ko", "none"}:
+        unknown_policy = "none"
+    state.router = LangRouter(
+        room,
+        ko_sid=ko_pub.sid,
+        ja_sid=ja_pub.sid,
+        unknown_policy=unknown_policy,
+    )
+    await state.router.apply_now("initial")
     state.tasks.update({ko_task, ja_task})
     for task in (ko_task, ja_task):
         task.add_done_callback(state.tasks.discard)
