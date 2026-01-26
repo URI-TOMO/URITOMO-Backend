@@ -72,8 +72,8 @@ async def generate_dense_live_data(
     
     created_friends: List[User] = []
 
-    # 2. Create 12 Friends & DM Threads
-    for i in range(12):
+    # 2. Create 4 Friends & DM Threads
+    for i in range(4):
         loc = random.choice(locales)
         name = random.choice(names[loc]) + f"_{uuid4().hex[:3]}"
         f_id = f"f_live_{uuid4().hex[:8]}"
@@ -113,9 +113,9 @@ async def generate_dense_live_data(
         db.add(DmParticipant(id=str(uuid4()), thread_id=thread.id, user_id=current_user_id, joined_at=thread.created_at))
         db.add(DmParticipant(id=str(uuid4()), thread_id=thread.id, user_id=f_id, joined_at=thread.created_at))
         
-        # 80 DM messages
+        # 10 DM messages
         base_time = thread.created_at + timedelta(minutes=30)
-        for k in range(80):
+        for k in range(10):
             sender_id = current_user_id if k % 2 == 0 else f_id
             sender_locale = user.locale if sender_id == current_user_id else friend.locale
             
@@ -137,10 +137,10 @@ async def generate_dense_live_data(
         if i % 4 == 0:
             await db.flush()
 
-    # 3. Create 6 Rooms
+    # 3. Create 2 Rooms
     room_titles = [
-        "Global Engineering Sync", "Culture & Language Hub", "Weekend Coffee Chat", 
-        "AI Research Group", "Travel Buddies", "URITOMO Feedback"
+        "Global Engineering Sync",
+        "Culture & Language Hub",
     ]
     
     for i, title in enumerate(room_titles):
@@ -165,9 +165,9 @@ async def generate_dense_live_data(
         )
         db.add(owner_member)
         
-        # Add 6-10 random friends as members
+        # Add 1 random friend as member (2 members per room including owner)
         room_members = [owner_member]
-        selected_friends = random.sample(created_friends, k=random.randint(6, 10))
+        selected_friends = random.sample(created_friends, k=1)
         id_to_locale = {user.id: user.locale}
         
         for f in selected_friends:
@@ -185,9 +185,9 @@ async def generate_dense_live_data(
             
         await db.flush()
             
-        # 120 room chat messages
+        # 12 room chat messages
         base_time = room.created_at + timedelta(days=1)
-        for k in range(120):
+        for k in range(12):
             sender_mem = random.choice(room_members)
             sender_locale = id_to_locale.get(sender_mem.user_id, "en")
             
@@ -205,9 +205,9 @@ async def generate_dense_live_data(
             db.add(chat)
             stats["chat_messages"] += 1
             
-        # 4. 4 Live Sessions per room
+        # 4. 1 Live Session per room
         live_seq = 0
-        for s in range(4):
+        for s in range(1):
             session_id = str(uuid4())
             s_start = room.created_at + timedelta(days=s*5 + 2, hours=10)
             session = RoomLiveSession(
