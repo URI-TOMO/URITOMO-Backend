@@ -1,16 +1,17 @@
 from datetime import timedelta
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from livekit import api as lk_api
 
 from app.core.config import settings
-from app.core.deps import SessionDep
+from app.core.deps import SessionDep, RedisDep
 from app.core.errors import AppError, NotFoundError, PermissionError
-from app.core.token import CurrentUserDep
+from app.core.token import CurrentUserDep, decode_token
+from app.meeting.livekit.events import publish_room_event
 from app.models.room import Room, RoomMember
 from app.models.user import User
 
@@ -40,13 +41,51 @@ async def create_livekit_token(
     data: LiveKitTokenRequest,
     current_user_id: CurrentUserDep,
     session: SessionDep,
+    request: Request,
+    redis: RedisDep,
 ):
     _require_livekit_env()
+
+    payload = None
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        token = auth_header.split(" ", 1)[1]
+        payload = decode_token(token)
+
+    is_worker = payload is not None and payload.get("role") == "worker"
 
     room_result = await session.execute(select(Room).where(Room.id == data.room_id))
     room = room_result.scalar_one_or_none()
     if not room:
         raise NotFoundError("Room not found")
+
+    if is_worker:
+        token_room = payload.get("room_id")
+        if token_room and token_room != data.room_id:
+            raise PermissionError("Worker token not allowed for this room")
+
+        display_name = payload.get("name") or "LiveKit Worker"
+
+        grants = lk_api.VideoGrants(
+            room_join=True,
+            room=data.room_id,
+            can_publish=True,
+            can_subscribe=True,
+            can_publish_data=True,
+        )
+
+        token_builder = (
+            lk_api.AccessToken(settings.livekit_api_key, settings.livekit_api_secret)
+            .with_identity(current_user_id)
+            .with_grants(grants)
+            .with_ttl(timedelta(seconds=3600))
+            .with_name(display_name)
+            .with_attributes({"role": "worker"})
+        )
+
+        jwt = token_builder.to_jwt()
+
+        return LiveKitTokenResponse(url=settings.livekit_url, token=jwt)
 
     member_result = await session.execute(
         select(RoomMember).where(
@@ -83,5 +122,12 @@ async def create_livekit_token(
         token_builder = token_builder.with_attributes({"lang": user.locale})
 
     jwt = token_builder.to_jwt()
+
+    await publish_room_event(
+        redis,
+        action="join",
+        room_id=data.room_id,
+        user_id=current_user_id,
+    )
 
     return LiveKitTokenResponse(url=settings.livekit_url, token=jwt)

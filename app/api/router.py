@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from app.debug.api import router as debug_router
 from app.api.user.login import router as auth_router
 from app.api.user.main import router as main_router
+from app.worker.worker_token import router as worker_token_router
 
 from app.meeting.sessions import router as meeting_router
 from app.meeting.ws.ws_base import router as meeting_ws_router
@@ -20,6 +21,7 @@ api_router = APIRouter()
 # 1. Routes that DON'T need authentication (Public/Debug)
 api_router.include_router(debug_router, prefix="/debug")
 api_router.include_router(auth_router)  # Includes real signup/login
+api_router.include_router(worker_token_router)
 
 # 2. Routes that DO need authentication (Protected)
 api_router.include_router(main_router, dependencies=[Depends(security_scheme)])
@@ -44,4 +46,3 @@ api_router.include_router(summary_setup_mock_router, dependencies=[Depends(secur
 # 4. Translation Routes
 from app.translation.api import router as translation_router
 api_router.include_router(translation_router, prefix="/translation", dependencies=[Depends(security_scheme)])
-

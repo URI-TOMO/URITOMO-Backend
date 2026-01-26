@@ -22,6 +22,9 @@ fi
 
 echo -e "${GREEN}✅ Containers are up and running.${NC}"
 
+# 1-1. Ensure livekit_sniffer is recreated with latest env
+docker-compose up -d --force-recreate livekit_sniffer
+
 # 2. Determine LAN IP for display (best-effort on macOS)
 LAN_IP=""
 if command -v ipconfig >/dev/null 2>&1; then
@@ -61,4 +64,5 @@ fi
 echo -e "${YELLOW}💡 LAN IP 확인: ${NC} ipconfig getifaddr en0"
 echo -e "${GREEN}==============================================${NC}"
 echo -e "${YELLOW}💡 To see real-time logs, run: ${NC} docker-compose logs -f api"
+echo -e "${YELLOW}💡 LiveKit sniffer logs:      ${NC} docker-compose logs -f livekit_sniffer"
 echo -e "${YELLOW}💡 To stop services, run:      ${NC} docker-compose down"
