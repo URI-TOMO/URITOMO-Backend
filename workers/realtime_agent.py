@@ -293,7 +293,17 @@ class RealtimeSession:
             return "unknown"
         name = f"{self._last_speaker_name}" if self._last_speaker_name else "anon"
         lang = self._last_speaker_lang or "unknown"
-        return f"{self._last_speaker_identity}/{name}/{lang}"
+        return f"name={name} id={self._last_speaker_identity} user_lang={lang}"
+
+    def _format_stt_block(self, text: str) -> str:
+        speaker = self._speaker_tag()
+        return (
+            "------------ STT ------------\n"
+            f"[Speaker] {speaker}\n"
+            f"[SessionLang] {self.lang}\n"
+            f"[Data] {text}\n"
+            "-----------------------------"
+        )
 
     def _instructions(self) -> str:
         if self.lang == "ko":
@@ -403,25 +413,22 @@ class RealtimeSession:
                 elif event_type == "conversation.item.input_audio_transcription.completed":
                     transcript = data.get("transcript") or data.get("text") or ""
                     if transcript:
-                        print(
-                            f"📝🗣️ [STT] speaker={self._speaker_tag()} "
-                            f"session_lang={self.lang} text={transcript!r}"
-                        )
+                        print(self._format_stt_block(transcript))
                         asyncio.create_task(self._save_transcript(transcript))
                     await self._handle_transcript(transcript)
                 elif event_type == "conversation.item.input_audio_transcription.delta":
                     delta_text = data.get("delta") or data.get("text") or ""
                     if delta_text:
                         print(
-                            f"✍️ [STT] speaker={self._speaker_tag()} "
-                            f"session_lang={self.lang} delta={delta_text!r}"
+                            f"✨✍️✨ [STT] speaker=({self._speaker_tag()}) "
+                            f"session_lang={self.lang} delta={delta_text!r} ✨✍️✨"
                         )
                 elif event_type == "conversation.item.input_audio_transcription.segment":
                     segment_text = data.get("text") or ""
                     if segment_text:
                         print(
-                            f"🧩 [STT] speaker={self._speaker_tag()} "
-                            f"session_lang={self.lang} segment={segment_text!r}"
+                            f"✨🧩✨ [STT] speaker=({self._speaker_tag()}) "
+                            f"session_lang={self.lang} segment={segment_text!r} ✨🧩✨"
                         )
                 elif event_type == "input_audio_buffer.speech_started":
                     print(f"[REALTIME] vad.started lang={self.lang}")
