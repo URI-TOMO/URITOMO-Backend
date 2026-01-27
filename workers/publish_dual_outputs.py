@@ -36,6 +36,7 @@ class RoomState:
     router: Optional["LangRouter"] = None
     ko_pub_sid: Optional[str] = None
     ja_pub_sid: Optional[str] = None
+    empty_check_task: Optional[asyncio.Task] = None
 
 
 async def fetch_livekit_token(
@@ -407,15 +408,19 @@ async def connect_room(
         )
         if state.router:
             state.router.schedule_recompute("participant_connected")
+        if state.empty_check_task and not state.empty_check_task.done():
+            state.empty_check_task.cancel()
+        state.empty_check_task = None
+
 
     @room.on("participant_disconnected")
     def _on_participant_disconnected(participant: rtc.RemoteParticipant):
         print(f"[ROOM] participant_disconnected room_id={room_id} identity={participant.identity}")
         if state.router:
             state.router.schedule_recompute("participant_disconnected")
-        if len(room.remote_participants) == 0:
-            print(f"[ROOM] no participants left, disconnecting room_id={room_id}")
-            asyncio.create_task(disconnect_room(room_id, rooms))
+        if state.empty_check_task and not state.empty_check_task.done():
+            state.empty_check_task.cancel()
+        state.empty_check_task = asyncio.create_task(_disconnect_if_empty(room_id, rooms))
 
     @room.on("participant_attributes_changed")
     def _on_participant_attributes_changed(
@@ -445,14 +450,7 @@ async def connect_room(
     ko_source, ko_pub = await publish_output_track(room, track_name=ko_track)
     ja_source, ja_pub = await publish_output_track(room, track_name=ja_track)
 
-    ko_pattern = [(800, 1200)]
-    ja_pattern = [(200, 150), (200, 900)]
-    ko_task = asyncio.create_task(
-        play_beep(ko_source, freq_hz=ko_hz, label=f"KO({ko_hz}Hz)", pattern=ko_pattern)
-    )
-    ja_task = asyncio.create_task(
-        play_beep(ja_source, freq_hz=ja_hz, label=f"JA({ja_hz}Hz)", pattern=ja_pattern)
-    )
+    print("[BEEP] disabled (no test tone output)")
     unknown_policy = os.getenv("LIVEKIT_UNKNOWN_LANG_POLICY", "none").lower()
     if unknown_policy not in {"both", "ko", "none"}:
         unknown_policy = "none"
@@ -463,19 +461,30 @@ async def connect_room(
         unknown_policy=unknown_policy,
     )
     await state.router.apply_now("initial")
-    state.tasks.update({ko_task, ja_task})
-    for task in (ko_task, ja_task):
-        task.add_done_callback(state.tasks.discard)
+    # No test tone tasks; output tracks remain published for routing tests.
 
 
 async def disconnect_room(room_id: str, rooms: dict[str, RoomState]) -> None:
     state = rooms.pop(room_id, None)
     if not state:
         return
+    if state.empty_check_task and not state.empty_check_task.done():
+        state.empty_check_task.cancel()
     for task in list(state.tasks):
         task.cancel()
     await maybe_await(state.room.disconnect())
     print(f"[BOOT] disconnected room_id={room_id}")
+
+
+async def _disconnect_if_empty(room_id: str, rooms: dict[str, RoomState]) -> None:
+    await asyncio.sleep(0.6)
+    state = rooms.get(room_id)
+    if not state:
+        return
+    if state.room.remote_participants:
+        return
+    print(f"[ROOM] no participants left, disconnecting room_id={room_id}")
+    await disconnect_room(room_id, rooms)
 
 
 async def listen_room_events(
