@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta
 import random
 import hashlib
-from typing import List
+from typing import List, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, status, Query
+from fastapi import APIRouter, Depends, status, Query, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import text, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -23,6 +24,41 @@ router = APIRouter(tags=["debug"])
 router.include_router(for_live_router)
 router.include_router(login_router)
 
+class DebugUserInfo(BaseModel):
+    id: str
+    email: Optional[str]
+    display_name: str
+    locale: Optional[str]
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+@router.get("/user_info", response_model=list[DebugUserInfo], status_code=status.HTTP_200_OK)
+async def debug_user_info(
+    name: str = Query(..., min_length=1, max_length=128),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Fetch user rows by display_name (debug).
+    """
+    result = await db.execute(select(User).where(User.display_name == name))
+    users = result.scalars().all()
+    if not users:
+        raise HTTPException(status_code=404, detail=f"User '{name}' not found.")
+
+    return [
+        DebugUserInfo(
+            id=user.id,
+            email=user.email,
+            display_name=user.display_name,
+            locale=user.locale,
+            status=user.status,
+            created_at=user.created_at,
+            updated_at=user.updated_at,
+        )
+        for user in users
+    ]
 
 
 

@@ -23,4 +23,4 @@ class LiveSessionMemberSchema(BaseModel):
 
 class SuccessResponse(BaseModel):
     status: str
-    data: dict
+    data: Optional[dict] = None

@@ -22,7 +22,18 @@ fi
 
 echo -e "${GREEN}✅ Containers are up and running.${NC}"
 
-# 2. Run Database Migrations
+# 1-1. Ensure LiveKit workers are recreated with latest env
+docker-compose up -d --force-recreate livekit_sniffer livekit_publisher
+
+# 1-2. Warn if WORKER_SERVICE_KEY is missing (LiveKit workers need it)
+if [ -f .env ]; then
+    WORKER_KEY_LINE=$(grep -E '^WORKER_SERVICE_KEY=' .env | tail -n1)
+    WORKER_KEY_VALUE="${WORKER_KEY_LINE#WORKER_SERVICE_KEY=}"
+    if [ -z "$WORKER_KEY_VALUE" ]; then
+        echo -e "${YELLOW}⚠️  WORKER_SERVICE_KEY is empty. LiveKit workers may fail to authenticate.${NC}"
+    fi
+fi
+
 LAN_IP=""
 if command -v ipconfig >/dev/null 2>&1; then
     LAN_IP=$(ipconfig getifaddr en0 2>/dev/null)
@@ -58,7 +69,10 @@ if [ -n "$LAN_IP" ]; then
 else
     echo -e "${YELLOW}⚠️  LAN IP not detected. Check with: ${NC} ipconfig getifaddr en0"
 fi
-echo -e "${YELLOW}💡 LAN IP 확인: ${NC} ipconfig getifaddr en0"
+echo -e "${YELLOW}💡 LAN IP Check: ${NC} ipconfig getifaddr en0"
 echo -e "${GREEN}==============================================${NC}"
 echo -e "${YELLOW}💡 To see real-time logs, run: ${NC} docker-compose logs -f api"
+echo -e "${YELLOW}💡 LiveKit sniffer logs:      ${NC} docker-compose logs -f livekit_sniffer"
+echo -e "${YELLOW}💡 LiveKit publisher logs:    ${NC} docker-compose logs -f livekit_publisher"
+echo -e "${YELLOW}💡 Worker logs (optional):    ${NC} docker-compose --profile with-worker logs -f worker"
 echo -e "${YELLOW}💡 To stop services, run:      ${NC} docker-compose down"
