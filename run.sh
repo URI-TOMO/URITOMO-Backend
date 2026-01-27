@@ -34,7 +34,6 @@ if [ -f .env ]; then
     fi
 fi
 
-# 2. Determine LAN IP for display (best-effort on macOS)
 LAN_IP=""
 if command -v ipconfig >/dev/null 2>&1; then
     LAN_IP=$(ipconfig getifaddr en0 2>/dev/null)
@@ -70,7 +69,7 @@ if [ -n "$LAN_IP" ]; then
 else
     echo -e "${YELLOW}⚠️  LAN IP not detected. Check with: ${NC} ipconfig getifaddr en0"
 fi
-echo -e "${YELLOW}💡 LAN IP 확인: ${NC} ipconfig getifaddr en0"
+echo -e "${YELLOW}💡 LAN IP Check: ${NC} ipconfig getifaddr en0"
 echo -e "${GREEN}==============================================${NC}"
 echo -e "${YELLOW}💡 To see real-time logs, run: ${NC} docker-compose logs -f api"
 echo -e "${YELLOW}💡 LiveKit sniffer logs:      ${NC} docker-compose logs -f livekit_sniffer"
