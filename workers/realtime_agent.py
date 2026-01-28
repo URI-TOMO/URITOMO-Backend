@@ -260,6 +260,7 @@ class RealtimeSession:
         self._trigger_debug = trigger_debug
         self._trigger_phrases = [p for p in (phrase.strip() for phrase in trigger_phrases) if p]
         self._trigger_norm = [self._normalize_text(p) for p in self._trigger_phrases]
+        self._trigger_prompt = ", ".join(self._trigger_phrases)
         self._wake_cooldown_s = wake_cooldown_s
         self._last_wake_ts = 0.0
         self._history_max_turns = history_max_turns
@@ -331,7 +332,6 @@ class RealtimeSession:
                         "transcription": {
                             "model": self.transcribe_model,
                             "language": self.lang,
-                            "prompt": ", ".join(self._trigger_phrases),
                         },
                         "turn_detection": {
                             "type": "server_vad",
@@ -419,20 +419,29 @@ class RealtimeSession:
                             self._audio_bytes = 0
                             self._last_audio_log = now
                         await self._push_audio(audio_bytes)
-                elif event_type == "conversation.item.input_audio_transcription.completed":
+                elif event_type in {
+                    "conversation.item.input_audio_transcription.completed",
+                    "input_audio_transcription.completed",
+                }:
                     transcript = data.get("transcript") or data.get("text") or ""
                     if transcript:
                         print(self._format_stt_block(transcript))
                         asyncio.create_task(self._save_transcript(transcript))
                     await self._handle_transcript(transcript)
-                elif event_type == "conversation.item.input_audio_transcription.delta":
+                elif event_type in {
+                    "conversation.item.input_audio_transcription.delta",
+                    "input_audio_transcription.delta",
+                }:
                     delta_text = data.get("delta") or data.get("text") or ""
                     if delta_text:
                         print(
                             f"✨✍️✨ [STT] speaker=({self._speaker_tag()}) "
                             f"session_lang={self.lang} delta={delta_text!r} ✨✍️✨"
                         )
-                elif event_type == "conversation.item.input_audio_transcription.segment":
+                elif event_type in {
+                    "conversation.item.input_audio_transcription.segment",
+                    "input_audio_transcription.segment",
+                }:
                     segment_text = data.get("text") or ""
                     if segment_text:
                         print(
@@ -537,6 +546,12 @@ class RealtimeSession:
 
     async def _handle_transcript(self, transcript: str) -> None:
         if not transcript:
+            return
+        if self._trigger_prompt and transcript.strip() == self._trigger_prompt:
+            print(
+                f"[REALTIME] ignore transcript matches trigger prompt lang={self.lang} "
+                f"transcript={transcript!r}"
+            )
             return
         self._append_history("user", transcript)
         triggered = self._always_respond or self._contains_trigger_phrase(transcript)
