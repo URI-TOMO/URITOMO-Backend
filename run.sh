@@ -11,6 +11,9 @@ NC='\033[0m' # No Color
 
 echo -e "${BLUE}🚀 Starting URITOMO Backend services...${NC}"
 
+# 0. Clean removed LiveKit worker containers (if they still exist)
+docker-compose rm -sf livekit_publisher livekit_sniffer >/dev/null 2>&1
+
 # 1. Start Docker containers in background
 # --build: Ensures changes to Dockerfile or app code are reflected
 docker-compose up -d --build
@@ -23,7 +26,7 @@ fi
 echo -e "${GREEN}✅ Containers are up and running.${NC}"
 
 # 1-1. Ensure LiveKit workers are recreated with latest env
-docker-compose up -d --force-recreate livekit_sniffer livekit_publisher
+docker-compose up -d --force-recreate livekit_realtime_agent
 
 # 1-2. Warn if WORKER_SERVICE_KEY is missing (LiveKit workers need it)
 if [ -f .env ]; then
@@ -73,7 +76,6 @@ fi
 echo -e "${YELLOW}💡 LAN IP Check: ${NC} ipconfig getifaddr en0"
 echo -e "${GREEN}==============================================${NC}"
 echo -e "${YELLOW}💡 To see real-time logs, run: ${NC} docker-compose logs -f api"
-echo -e "${YELLOW}💡 LiveKit sniffer logs:      ${NC} docker-compose logs -f livekit_sniffer"
-echo -e "${YELLOW}💡 LiveKit publisher logs:    ${NC} docker-compose logs -f livekit_publisher"
+echo -e "${YELLOW}💡 LiveKit realtime logs:     ${NC} docker-compose logs -f livekit_realtime_agent"
 echo -e "${YELLOW}💡 Worker logs (optional):    ${NC} docker-compose --profile with-worker logs -f worker"
 echo -e "${YELLOW}💡 To stop services, run:      ${NC} docker-compose down"

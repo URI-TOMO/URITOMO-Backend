@@ -238,9 +238,11 @@ class RealtimeSession:
         vad_prefix_ms: int,
         vad_silence_ms: int,
         voice: str,
+        output_modalities: list[str],
         always_respond: bool,
         history_max_turns: int,
         save_stt: bool,
+        trigger_debug: bool,
     ) -> None:
         self.lang = lang
         self.room_id = room_id
@@ -250,18 +252,24 @@ class RealtimeSession:
         self.transcribe_model = transcribe_model
         self.output_source = output_source
         self.voice = voice
+        self.output_modalities = output_modalities
         self.vad_threshold = vad_threshold
         self.vad_prefix_ms = vad_prefix_ms
         self.vad_silence_ms = vad_silence_ms
         self._always_respond = always_respond
+        self._trigger_debug = trigger_debug
         self._trigger_phrases = [p for p in (phrase.strip() for phrase in trigger_phrases) if p]
         self._trigger_norm = [self._normalize_text(p) for p in self._trigger_phrases]
+        self._trigger_prompt = ", ".join(self._trigger_phrases)
         self._wake_cooldown_s = wake_cooldown_s
         self._last_wake_ts = 0.0
         self._history_max_turns = history_max_turns
         self._history: list[dict[str, str]] = []
         self._assistant_partial = ""
         self._response_in_flight = False
+        self._pending_transcript: Optional[str] = None
+        self._pending_force = False
+        self._pending_log_label: Optional[str] = None
         self._save_stt = save_stt
 
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
@@ -317,26 +325,27 @@ class RealtimeSession:
             "session": {
                 "type": "realtime",
                 "instructions": self._instructions(),
-                "output_modalities": ["audio", "text"],
+                "output_modalities": self.output_modalities,
                 "audio": {
-                    "input": {"format": pcm_format},
-                    "transcription": {
-                        "model": self.transcribe_model,
-                        "language": self.lang,
-                        "prompt": ", ".join(self._trigger_phrases),
+                    "input": {
+                        "format": pcm_format,
+                        "transcription": {
+                            "model": self.transcribe_model,
+                            "language": self.lang,
+                        },
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": self.vad_threshold,
+                            "prefix_padding_ms": self.vad_prefix_ms,
+                            "silence_duration_ms": self.vad_silence_ms,
+                            "create_response": False,
+                            "interrupt_response": True,
+                        },
                     },
-                },
-                "output": {
-                    "format": pcm_format,
-                    "voice": self.voice,
-                },
-                "turn_detection": {
-                    "type": "server_vad",
-                    "threshold": self.vad_threshold,
-                    "prefix_padding_ms": self.vad_prefix_ms,
-                    "silence_duration_ms": self.vad_silence_ms,
-                    "create_response": False,
-                    "interrupt_response": True,
+                    "output": {
+                        "format": pcm_format,
+                        "voice": self.voice,
+                    },
                 },
             },
         }
@@ -410,20 +419,29 @@ class RealtimeSession:
                             self._audio_bytes = 0
                             self._last_audio_log = now
                         await self._push_audio(audio_bytes)
-                elif event_type == "conversation.item.input_audio_transcription.completed":
+                elif event_type in {
+                    "conversation.item.input_audio_transcription.completed",
+                    "input_audio_transcription.completed",
+                }:
                     transcript = data.get("transcript") or data.get("text") or ""
                     if transcript:
                         print(self._format_stt_block(transcript))
                         asyncio.create_task(self._save_transcript(transcript))
                     await self._handle_transcript(transcript)
-                elif event_type == "conversation.item.input_audio_transcription.delta":
+                elif event_type in {
+                    "conversation.item.input_audio_transcription.delta",
+                    "input_audio_transcription.delta",
+                }:
                     delta_text = data.get("delta") or data.get("text") or ""
                     if delta_text:
                         print(
                             f"✨✍️✨ [STT] speaker=({self._speaker_tag()}) "
                             f"session_lang={self.lang} delta={delta_text!r} ✨✍️✨"
                         )
-                elif event_type == "conversation.item.input_audio_transcription.segment":
+                elif event_type in {
+                    "conversation.item.input_audio_transcription.segment",
+                    "input_audio_transcription.segment",
+                }:
                     segment_text = data.get("text") or ""
                     if segment_text:
                         print(
@@ -450,6 +468,8 @@ class RealtimeSession:
                         self._append_history("assistant", self._assistant_partial.strip())
                         self._assistant_partial = ""
                     print(f"[REALTIME] response.done lang={self.lang} status={status}")
+                    if self._pending_transcript:
+                        asyncio.create_task(self._flush_pending_response())
                 elif event_type == "response.output_audio.done":
                     pass
                 elif event_type in {"response.output_text.delta", "response.text.delta"}:
@@ -469,25 +489,10 @@ class RealtimeSession:
         except Exception as exc:
             print(f"[REALTIME] recv_loop error lang={self.lang} err={exc!r}")
 
-    async def _handle_transcript(self, transcript: str) -> None:
-        if not transcript:
-            return
-        self._append_history("user", transcript)
+    async def _send_response(self, transcript: str, *, log_label: str, force: bool) -> None:
         now = time.monotonic()
-        if self._response_in_flight:
+        if not force and now - self._last_wake_ts < self._wake_cooldown_s:
             return
-        if not self._always_respond:
-            if not self._contains_trigger_phrase(transcript):
-                return
-            if now - self._last_wake_ts < self._wake_cooldown_s:
-                return
-            prompt_text = transcript
-            log_label = "trigger detected"
-        else:
-            if now - self._last_wake_ts < self._wake_cooldown_s:
-                return
-            prompt_text = transcript
-            log_label = "auto response"
         self._last_wake_ts = now
         messages = self._build_history_messages()
         await self._send_json(
@@ -499,7 +504,7 @@ class RealtimeSession:
                         {
                             "type": "message",
                             "role": "user",
-                            "content": [{"type": "input_text", "text": prompt_text}],
+                            "content": [{"type": "input_text", "text": transcript}],
                         }
                     ]
                     if not messages
@@ -519,9 +524,69 @@ class RealtimeSession:
             f"history={len(messages)} transcript={transcript!r}"
         )
 
+    def _set_pending_response(self, transcript: str, log_label: str) -> None:
+        self._pending_transcript = transcript
+        self._pending_force = True
+        self._pending_log_label = log_label
+        print(
+            f"[REALTIME] defer response lang={self.lang} "
+            f"reason=in_flight transcript={transcript!r}"
+        )
+
+    async def _flush_pending_response(self) -> None:
+        transcript = self._pending_transcript
+        if not transcript:
+            return
+        log_label = self._pending_log_label or "deferred response"
+        force = self._pending_force
+        self._pending_transcript = None
+        self._pending_log_label = None
+        self._pending_force = False
+        await self._send_response(transcript, log_label=log_label, force=force)
+
+    async def _handle_transcript(self, transcript: str) -> None:
+        if not transcript:
+            return
+        if self._trigger_prompt and transcript.strip() == self._trigger_prompt:
+            print(
+                f"[REALTIME] ignore transcript matches trigger prompt lang={self.lang} "
+                f"transcript={transcript!r}"
+            )
+            return
+        self._append_history("user", transcript)
+        triggered = self._always_respond or self._contains_trigger_phrase(transcript)
+        if self._trigger_debug and not triggered and not self._always_respond:
+            print(
+                f"[REALTIME] trigger miss lang={self.lang} "
+                f"transcript={transcript!r} normalized={self._normalize_text(transcript)!r} "
+                f"triggers={self._trigger_phrases}"
+            )
+        if self._response_in_flight:
+            if triggered:
+                log_label = "trigger detected (deferred)" if not self._always_respond else "auto response (deferred)"
+                self._set_pending_response(transcript, log_label)
+            return
+        if not triggered:
+            return
+        log_label = "trigger detected" if not self._always_respond else "auto response"
+        await self._send_response(transcript, log_label=log_label, force=False)
+
     def _normalize_text(self, text: str) -> str:
         cleaned = text.lower()
-        for ch in [" ", "\t", "\n", "\r", ".", ",", "!", "?", "。", "、", "！", "？", "…", "‥"]:
+        # Convert Katakana to Hiragana (U+30A1–U+30F6 -> U+3041–U+3096)
+        converted = []
+        for ch in cleaned:
+            code = ord(ch)
+            if 0x30A1 <= code <= 0x30F6:
+                converted.append(chr(code - 0x60))
+            else:
+                converted.append(ch)
+        cleaned = "".join(converted)
+        for ch in [
+            " ", "\t", "\n", "\r",
+            ".", ",", "!", "?", "。", "、", "！", "？",
+            "…", "‥", "・", "ー", "－", "—", "〜", "～",
+        ]:
             cleaned = cleaned.replace(ch, "")
         return cleaned
 
@@ -889,6 +954,7 @@ async def connect_room(
     voice_ko: str,
     voice_ja: str,
     transcribe_model: str,
+    output_modalities: list[str],
     trigger_phrases: list[str],
     wake_cooldown_s: float,
     vad_threshold: float,
@@ -897,6 +963,7 @@ async def connect_room(
     always_respond: bool,
     history_max_turns: int,
     save_stt: bool,
+    trigger_debug: bool,
 ) -> None:
     if room_id in rooms:
         return
@@ -1028,12 +1095,14 @@ async def connect_room(
         wake_cooldown_s=wake_cooldown_s,
         output_source=ko_source,
         voice=voice_ko,
+        output_modalities=output_modalities,
         vad_threshold=vad_threshold,
         vad_prefix_ms=vad_prefix_ms,
         vad_silence_ms=vad_silence_ms,
         always_respond=always_respond,
         history_max_turns=history_max_turns,
         save_stt=save_stt,
+        trigger_debug=trigger_debug,
     )
     state.realtime_ja = RealtimeSession(
         lang="ja",
@@ -1046,12 +1115,14 @@ async def connect_room(
         wake_cooldown_s=wake_cooldown_s,
         output_source=ja_source,
         voice=voice_ja,
+        output_modalities=output_modalities,
         vad_threshold=vad_threshold,
         vad_prefix_ms=vad_prefix_ms,
         vad_silence_ms=vad_silence_ms,
         always_respond=always_respond,
         history_max_turns=history_max_turns,
         save_stt=save_stt,
+        trigger_debug=trigger_debug,
     )
 
     await asyncio.gather(state.realtime_ko.start(), state.realtime_ja.start())
@@ -1109,6 +1180,7 @@ async def listen_room_events(
     voice_ko: str,
     voice_ja: str,
     transcribe_model: str,
+    output_modalities: list[str],
     trigger_phrases: list[str],
     wake_cooldown_s: float,
     vad_threshold: float,
@@ -1117,6 +1189,7 @@ async def listen_room_events(
     always_respond: bool,
     history_max_turns: int,
     save_stt: bool,
+    trigger_debug: bool,
 ) -> None:
     redis = aioredis.from_url(redis_url, encoding="utf-8", decode_responses=True)
     pubsub = redis.pubsub()
@@ -1154,6 +1227,7 @@ async def listen_room_events(
                         voice_ko=voice_ko,
                         voice_ja=voice_ja,
                         transcribe_model=transcribe_model,
+                        output_modalities=output_modalities,
                         trigger_phrases=trigger_phrases,
                         wake_cooldown_s=wake_cooldown_s,
                         vad_threshold=vad_threshold,
@@ -1162,6 +1236,7 @@ async def listen_room_events(
                         always_respond=always_respond,
                         history_max_turns=history_max_turns,
                         save_stt=save_stt,
+                        trigger_debug=trigger_debug,
                     )
                 except Exception as exc:
                     print(f"[EVENT] join failed room_id={room_id} error={exc!r}")
@@ -1200,6 +1275,21 @@ async def main() -> None:
     voice_ko = os.getenv("OPENAI_REALTIME_VOICE_KO", default_voice)
     voice_ja = os.getenv("OPENAI_REALTIME_VOICE_JA", default_voice)
     transcribe_model = os.getenv("OPENAI_REALTIME_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
+    output_modalities_raw = os.getenv("OPENAI_REALTIME_OUTPUT_MODALITIES", "audio")
+    output_modalities = [
+        part.strip().lower()
+        for part in output_modalities_raw.split(",")
+        if part.strip()
+    ]
+    output_modalities = [m for m in output_modalities if m in {"audio", "text"}]
+    if not output_modalities:
+        output_modalities = ["audio"]
+    if "audio" in output_modalities and "text" in output_modalities:
+        print(
+            "[REALTIME] output_modalities includes both audio+text; "
+            "fallback to audio only to avoid API error"
+        )
+        output_modalities = ["audio"]
     trigger_phrase_raw = os.getenv(
         "OPENAI_TRIGGER_PHRASES",
         "우리토모는 어떻게 생각해?,ウリトモはどう思ってる？",
@@ -1222,6 +1312,8 @@ async def main() -> None:
     history_max_turns = int(os.getenv("OPENAI_HISTORY_MAX_TURNS", "0"))
     save_stt_value = os.getenv("OPENAI_STT_SAVE", "true")
     save_stt = save_stt_value.lower() in {"1", "true", "yes", "y", "on"}
+    trigger_debug_value = os.getenv("OPENAI_TRIGGER_DEBUG", "false")
+    trigger_debug = trigger_debug_value.lower() in {"1", "true", "yes", "y", "on"}
 
     if not always_respond and not trigger_phrases:
         raise RuntimeError("OPENAI_TRIGGER_PHRASES is empty")
@@ -1260,6 +1352,7 @@ async def main() -> None:
             voice_ko=voice_ko,
             voice_ja=voice_ja,
             transcribe_model=transcribe_model,
+            output_modalities=output_modalities,
             trigger_phrases=trigger_phrases,
             wake_cooldown_s=wake_cooldown_s,
             vad_threshold=vad_threshold,
@@ -1268,6 +1361,7 @@ async def main() -> None:
             always_respond=always_respond,
             history_max_turns=history_max_turns,
             save_stt=save_stt,
+            trigger_debug=trigger_debug,
         )
 
     await listen_room_events(
@@ -1287,6 +1381,7 @@ async def main() -> None:
         voice_ko=voice_ko,
         voice_ja=voice_ja,
         transcribe_model=transcribe_model,
+        output_modalities=output_modalities,
         trigger_phrases=trigger_phrases,
         wake_cooldown_s=wake_cooldown_s,
         vad_threshold=vad_threshold,
@@ -1295,6 +1390,7 @@ async def main() -> None:
         always_respond=always_respond,
         history_max_turns=history_max_turns,
         save_stt=save_stt,
+        trigger_debug=trigger_debug,
     )
 
 
