@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from app.debug.api import router as debug_router
 from app.api.user.login import router as auth_router
 from app.api.user.main import router as main_router
+from app.api.user.profile import router as profile_router
 
 from app.api.user.room_detail import router as room_detail_router
 from app.worker.worker_token import router as worker_token_router
@@ -28,6 +29,7 @@ api_router.include_router(worker_token_router)
 
 # 2. Routes that DO need authentication (Protected)
 api_router.include_router(main_router, dependencies=[Depends(security_scheme)])
+api_router.include_router(profile_router, dependencies=[Depends(security_scheme)])
 
 api_router.include_router(room_detail_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(friends_router, dependencies=[Depends(security_scheme)])
