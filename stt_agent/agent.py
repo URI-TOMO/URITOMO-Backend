@@ -46,10 +46,10 @@ SAMPLE_RATE_48K = 48000
 MEETING_CONTEXT = "IT開発会議, Python, LiveKit, VAD, API, フロントエンド, バックエンド, 議事録, Docker, AWS"
 
 # Hallucination filters
-MIN_SPEECH_DURATION_MS = 500
+MIN_SPEECH_DURATION_MS = 100
 MIN_RMS_THRESHOLD = 0.005
-VAD_START_THRESHOLD = 5
-VAD_END_THRESHOLD = 15
+VAD_START_THRESHOLD = 2
+VAD_END_THRESHOLD = 7
 MAX_CONCURRENT_STT = 5
 
 HALLUCINATION_PHRASES = [
@@ -322,13 +322,13 @@ class TranscriptionAgent:
 
     async def process_audio_stream(self, stream: rtc.AudioStream, participant: rtc.RemoteParticipant):
         
-        speech_buffer_48k = []
+        speech_buffer_16k = []
         vad_accumulator = bytearray()
         is_triggered = False
         start_confirm_count = 0
         end_confirm_count = 0
-        PRE_BUFFER_SIZE = 10
-        pre_speech_buffer = deque(maxlen=PRE_BUFFER_SIZE)
+        PRE_BUFFER_SIZE = 15 # 16kHz 32ms frames approx 0.5s
+        pre_speech_buffer_16k = deque(maxlen=PRE_BUFFER_SIZE)
         
         # リサンプラーの作成
         try:
@@ -382,38 +382,38 @@ class TranscriptionAgent:
                         if not is_triggered and start_confirm_count >= VAD_START_THRESHOLD:
                             is_triggered = True
                             logger.info(f"🗣️ Speech START detected for {participant.identity}")
-                            speech_buffer_48k.extend(list(pre_speech_buffer))
-                            pre_speech_buffer.clear()
+                            speech_buffer_16k.extend(list(pre_speech_buffer_16k))
+                            pre_speech_buffer_16k.clear()
                     else:
                         start_confirm_count = 0
                         if is_triggered:
                             end_confirm_count += 1
 
-                if is_triggered:
-                    speech_buffer_48k.append(frame.data)
-                else:
-                    pre_speech_buffer.append(frame.data)
+                    if is_triggered:
+                        speech_buffer_16k.append(chunk_data)
+                    else:
+                        pre_speech_buffer_16k.append(chunk_data)
 
-                if is_triggered and end_confirm_count >= VAD_END_THRESHOLD:
-                    is_triggered = False
-                    start_confirm_count = 0
-                    end_confirm_count = 0
+                    if is_triggered and end_confirm_count >= VAD_END_THRESHOLD:
+                        is_triggered = False
+                        start_confirm_count = 0
+                        end_confirm_count = 0
 
-                    total_bytes = sum(len(b) for b in speech_buffer_48k)
-                    duration_ms = (total_bytes / (SAMPLE_RATE_48K * 2)) * 1000
-                    if duration_ms < MIN_SPEECH_DURATION_MS:
-                        speech_buffer_48k = []
-                        continue
+                        total_bytes = sum(len(b) for b in speech_buffer_16k)
+                        duration_ms = (total_bytes / (VAD_SAMPLE_RATE * 2)) * 1000
+                        if duration_ms < MIN_SPEECH_DURATION_MS:
+                            speech_buffer_16k = []
+                            continue
 
-                    full_audio = b"".join(speech_buffer_48k)
-                    data_np = np.frombuffer(full_audio, dtype=np.int16).astype(np.float32) / 32768.0
-                    rms = calculate_rms(data_np)
-                    if rms < MIN_RMS_THRESHOLD:
-                        speech_buffer_48k = []
-                        continue
+                        full_audio = b"".join(speech_buffer_16k)
+                        data_np = np.frombuffer(full_audio, dtype=np.int16).astype(np.float32) / 32768.0
+                        rms = calculate_rms(data_np)
+                        if rms < MIN_RMS_THRESHOLD:
+                            speech_buffer_16k = []
+                            continue
 
-                    await self.stt_queue.put((list(speech_buffer_48k), participant))
-                    speech_buffer_48k = []
+                        await self.stt_queue.put((list(speech_buffer_16k), participant))
+                        speech_buffer_16k = []
 
         except Exception as e:
             logger.error(f"Error in audio processing for {participant.identity}: {e}")
@@ -459,7 +459,7 @@ class TranscriptionAgent:
             with wave.open(wav_buffer, "wb") as wf:
                 wf.setnchannels(1)
                 wf.setsampwidth(2)
-                wf.setframerate(SAMPLE_RATE_48K)
+                wf.setframerate(VAD_SAMPLE_RATE)
                 wf.writeframes(normalized_audio)
 
             wav_buffer.seek(0)
@@ -483,8 +483,6 @@ class TranscriptionAgent:
 
             words = text.split()
             if len(words) > 5 and len(set(words)) / len(words) < 0.2:
-                return
-            if len(text) < 2:
                 return
 
             raw_lang = getattr(transcript, 'language', 'unknown').lower()
