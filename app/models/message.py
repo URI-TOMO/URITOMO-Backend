@@ -16,9 +16,13 @@ class ChatMessage(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     room_id: Mapped[str] = mapped_column(ForeignKey("rooms.id"), nullable=False)
     seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    sender_type: Mapped[str] = mapped_column(String(16), nullable=False)  # participant | ai | system
+    # sender_type: human | ai | system
+    sender_type: Mapped[str] = mapped_column(String(16), nullable=False)
     sender_member_id: Mapped[Optional[str]] = mapped_column(ForeignKey("room_members.id"), nullable=True)
-    message_type: Mapped[str] = mapped_column(String(16), nullable=False)  # stt | ai | manual
+    
+    # message_type: text | translation | notice | error | tool
+    message_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    
     text: Mapped[str] = mapped_column(Text, nullable=False)
     lang: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
     start_ms: Mapped[Optional[int]] = mapped_column(nullable=True)
@@ -30,7 +34,7 @@ class ChatMessage(Base):
     __table_args__ = (
         UniqueConstraint("room_id", "seq", name="uq_room_seq"),
         Index("idx_room_created", "room_id", "created_at"),
-        Index("idx_room_sender_seq", "room_id", "sender_member_id", "seq"),
+        Index("idx_room_sender_member", "sender_member_id"),
     )
 
     # Relationships

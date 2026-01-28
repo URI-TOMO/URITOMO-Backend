@@ -6,6 +6,7 @@ FastAPI dependencies for routes.
 
 from typing import Annotated, AsyncGenerator
 
+from fastapi import Depends
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from redis.asyncio import Redis
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from qdrant_client import AsyncQdrantClient
 
 from app.core.config import settings
+from app.core.token import security_scheme, get_current_user_id, CurrentUserDep
 from app.core.security import verify_token
 from app.infra.db import get_db
 from app.infra.redis import get_redis

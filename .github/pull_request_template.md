@@ -1,17 +1,32 @@
-## ✅ What & Why
-<!-- what changed + why now -->
-Related: Closes #<!-- -->
+## 📌 What did you do?
+> Write a short summary in 1 line
 
-## 🛠️ Key Changes
-- <!-- Infra/Config: -->
-- <!-- API/Auth: -->
-- <!-- DB/Migrations: -->
-- <!-- AI (if any): -->
+Example)
+- Improve login API performance
+- Add validation to login request
 
-## 🧪 Verify / Risk
-```bash
-# how to run/test (keep it minimal)
-```
+---
 
-* Expected:
-* Risk / Rollback:
+## 🔧 How did you do it?
+> Briefly explain how (2–3 lines max)
+
+Example)
+- Optimized user lookup query by adding an index on email
+- Reduced redundant password validation logic
+
+---
+
+## 🧪 Show How did you test it.
+> Check only what you actually tested
+
+Example)
+- Show postman result or swagger result
+
+---
+
+## ⚠️ Notes for reviewers (Optional)
+> Anything reviewers should be aware of
+
+Example)
+- No changes to login API response schema
+- No DB migration required

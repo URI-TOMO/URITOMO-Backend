@@ -4,10 +4,13 @@ FastAPI Application Entry Point
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer
 
-from app.api.v1.router import api_router
+from app.api.router import api_router
+
 from app.core.config import settings
 from app.core.errors import (
     AppError,
@@ -17,7 +20,7 @@ from app.core.errors import (
     validation_exception_handler,
     general_exception_handler,
 )
-from app.core.logging import setup_logging, RequestIDMiddleware
+from app.core.logging import setup_logging, RequestIDMiddleware, RequestLoggingMiddleware
 from app.infra.db import close_db_connection
 from app.infra.redis import init_redis_pool, close_redis_pool
 from app.infra.qdrant import init_qdrant_client, close_qdrant_client, ensure_collections_exist
@@ -50,24 +53,16 @@ async def lifespan(app: FastAPI):
 
 tags_metadata = [
     {
-        "name": "Example CRUD",
-        "description": "Example CRUD operations for User and Room models.",
+        "name": "debug",
+        "description": "Debug tools for seeding data and testing.",
     },
     {
         "name": "auth",
-        "description": "Authentication operations (Login, Register).",
-    },
-    {
-        "name": "orgs",
-        "description": "Manage Organizations and their glossaries.",
+        "description": "Standard Authentication operations (Login, Register).",
     },
     {
         "name": "meetings",
         "description": "Create and manage translation meetings.",
-    },
-    {
-        "name": "segments",
-        "description": "Ingest and process transcript segments.",
     },
     {
         "name": "websocket",
@@ -97,20 +92,50 @@ URITOMO API provides real-time translation with cultural context explanations.
         openapi_url=f"{settings.api_prefix}/openapi.json",
         docs_url="/docs",
         redoc_url="/redoc",
-        swagger_ui_parameters={"persistAuthorization": True},
+        swagger_ui_parameters={
+            "persistAuthorization": True,
+            "displayRequestDuration": True
+        },
         lifespan=lifespan,
     )
 
+
     # Middleware
+    app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(RequestIDMiddleware)
+    
+    # Handle CORS
+    # Note: allow_origins=["*"] cannot be used with allow_credentials=True
+    allow_all_origins = "*" in settings.cors_origins
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
-        allow_credentials=settings.cors_credentials,
+        allow_credentials=settings.cors_credentials if not allow_all_origins else False,
         allow_methods=settings.cors_methods,
         allow_headers=settings.cors_headers,
     )
 
+    # Root Route
+    @app.get("/", tags=["health"], include_in_schema=False)
+    async def root():
+        return {
+            "message": "Welcome to URITOMO Backend API",
+            "docs": "/docs",
+            "status": "operational"
+        }
+
+    @app.get("/dashboard", include_in_schema=False)
+    @app.get("/dashboard/", include_in_schema=False)
+    async def dashboard_redirect(request: Request):
+        host = request.headers.get("host", "localhost:8000")
+        hostname = host.split(":")[0]
+        target = f"http://{hostname}:8501/dashboard"
+        return RedirectResponse(url=target, status_code=307)
+
+    # Routes
+
+    # We include dependencies=[Depends(HTTPBearer())] if we want to FORCE it everywhere globally.
+    # But usually, it's better to apply it to the main api_router.
     # Routes
     app.include_router(api_router, prefix=settings.api_prefix)
 

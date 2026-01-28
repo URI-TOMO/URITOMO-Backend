@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # API Server
     api_host: str = "0.0.0.0"
     api_port: int = 8000
-    api_prefix: str = "/api/v1"
+    api_prefix: str = ""
 
     # Database
     database_url: str = Field(
@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     # Security
     jwt_secret_key: str = Field(min_length=32)
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 30
+    access_token_expire_minutes: int = 60
     refresh_token_expire_days: int = 7
     
     # Google OAuth
@@ -78,6 +78,11 @@ class Settings(BaseSettings):
 
     deepl_api_key: Optional[str] = None
     deepl_api_url: str = "https://api-free.deepl.com/v2/translate"
+
+    # LiveKit
+    livekit_url: Optional[str] = None
+    livekit_api_key: Optional[str] = None
+    livekit_api_secret: Optional[str] = None
 
     # Translation Settings
     translation_provider: Literal["OPENAI", "DEEPL", "MOCK"] = "MOCK"
@@ -108,9 +113,17 @@ class Settings(BaseSettings):
     worker_queues: list[str] = ["default", "high", "low"]
     worker_result_ttl: int = 3600
     worker_job_timeout: int = 600
+    worker_service_key: Optional[str] = None
 
     # CORS
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8080"]
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://localhost:8080",
+        "http://localhost:8000",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:8080",
+    ]
     cors_credentials: bool = True
     cors_methods: list[str] = ["*"]
     cors_headers: list[str] = ["*"]
@@ -129,6 +142,21 @@ class Settings(BaseSettings):
     enable_explanation: bool = True
     enable_summary: bool = True
     enable_storage: bool = False
+
+    @validator("cors_origins", pre=True)
+    def assemble_cors_origins(cls, v: any) -> list[str]:
+        """Parse CORS origins from string, list, or JSON string"""
+        if isinstance(v, str) and not v.startswith("["):
+            return [i.strip() for i in v.split(",")]
+        elif isinstance(v, (list, str)):
+            import json
+            if isinstance(v, str):
+                try:
+                    return json.loads(v)
+                except json.JSONDecodeError:
+                    return [v]
+            return v
+        return ["*"]
 
     @validator("jwt_secret_key")
     def validate_jwt_secret(cls, v: str) -> str:
