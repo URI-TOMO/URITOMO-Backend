@@ -10,9 +10,8 @@ from app.infra.db import get_db
 from app.translation.schemas import STTTranslationRequest, STTTranslationResponse, DescriptionResponse
 from app.translation.deepl_service import deepl_service
 from app.translation.openai_service import openai_service
-from app.models.ai import AIEvent
-from app.models.room import Room
-from app.models.message import ChatMessage
+from app.models.room import RoomLiveSession
+from app.models.stt import RoomSttResult
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -41,7 +40,7 @@ async def translate_stt(
             target_lang=target_lang
         )
         
-        # Store in DB (AIEvent) only if it's a final transcript
+        # Store in DB (RoomSttResult) only if it's a final transcript
         # For non-final (partial) results, we might skip DB storage to save space,
         # but the user didn't specify. Usually only final results are persisted.
         if request.is_final:
@@ -50,27 +49,38 @@ async def translate_stt(
                     seq_int = int(request.sequence)
                 except ValueError:
                     seq_int = 0
-                    
+
+                session_result = await db.execute(
+                    select(RoomLiveSession)
+                    .where(
+                        RoomLiveSession.room_id == request.room_id,
+                        RoomLiveSession.status == "active",
+                    )
+                    .order_by(RoomLiveSession.started_at.desc())
+                )
+                live_session = session_result.scalars().first()
+                if not live_session:
+                    raise ValueError("Active live session not found")
+
                 import uuid
-                ai_event = AIEvent(
+                stt_result = RoomSttResult(
                     id=str(uuid.uuid4()),
                     room_id=request.room_id,
-                    seq=seq_int,
-                    event_type="translation",
-                    original_text=request.Original,
-                    original_lang=source_lang,
+                    session_id=live_session.id,
+                    member_id=request.participant_id,
+                    user_lang=source_lang,
+                    stt_text=request.Original,
                     translated_text=translated_text,
                     translated_lang=target_lang,
+                    seq=seq_int,
                     meta={
-                        "participant_id": request.participant_id,
                         "participant_name": request.participant_name,
                         "timestamp": request.timestamp,
-                        "is_stt": True,
-                        "is_speaking": request.is_speaking
-                    }
+                        "is_speaking": request.is_speaking,
+                    },
                 )
-                
-                db.add(ai_event)
+
+                db.add(stt_result)
                 await db.commit()
             except Exception as e:
                 logger.error(f"Failed to save STT translation event: {e}")
@@ -103,20 +113,36 @@ async def get_term_descriptions(
     Fetches all STT data, aggregates it, and uses OpenAI to identify/explain terms.
     """
     try:
-        # 1. Fetch all STT data for the room
-        stmt = select(ChatMessage).where(
-            ChatMessage.room_id == room_id,
-            ChatMessage.sender_type == "transcription"
-        ).order_by(ChatMessage.seq.asc())
-        
+        session_result = await db.execute(
+            select(RoomLiveSession)
+            .where(
+                RoomLiveSession.room_id == room_id,
+                RoomLiveSession.status == "active",
+            )
+            .order_by(RoomLiveSession.started_at.desc())
+        )
+        live_session = session_result.scalars().first()
+        if not live_session:
+            return DescriptionResponse(room_id=room_id, terms=[])
+
+        # 1. Fetch all STT data for the active session
+        stmt = (
+            select(RoomSttResult)
+            .where(
+                RoomSttResult.room_id == room_id,
+                RoomSttResult.session_id == live_session.id,
+            )
+            .order_by(RoomSttResult.seq.asc())
+        )
+
         result = await db.execute(stmt)
-        messages = result.scalars().all()
-        
-        if not messages:
+        results = result.scalars().all()
+
+        if not results:
             return DescriptionResponse(room_id=room_id, terms=[])
             
         # 2. Aggregate text
-        full_text = " ".join([m.text for m in messages])
+        full_text = " ".join([r.stt_text for r in results])
         
         # 3. Get descriptions from OpenAI
         terms = await openai_service.get_description_for_terms(full_text)

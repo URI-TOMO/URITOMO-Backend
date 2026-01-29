@@ -25,6 +25,7 @@ from app.models.room import Room, RoomMember
 from app.models.message import ChatMessage
 from app.models.token import AuthToken
 from app.models.ai import AIEvent
+from app.models.stt import RoomAiResponse, RoomSttResult
 from app.models.friend import UserFriend
 from app.models.dm import DmThread, DmParticipant, DmMessage
 
