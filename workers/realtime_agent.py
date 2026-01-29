@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.infra.db import AsyncSessionLocal
+from app.models.ai import AIEvent
 from app.models.message import ChatMessage
 from app.models.room import RoomMember
 
@@ -667,9 +668,45 @@ class RealtimeSession:
                     try:
                         await session.commit()
                         print(
-                            "🧾 [STT] saved "
+                            "🧾 [STT] saved chat_message "
                             f"room_id={self.room_id} seq={next_seq} "
                             f"member_id={member_id} lang={self._last_speaker_lang}"
+                        )
+                        break
+                    except IntegrityError:
+                        await session.rollback()
+                        continue
+
+                for _ in range(3):
+                    seq_result = await session.execute(
+                        select(func.max(AIEvent.seq)).where(AIEvent.room_id == self.room_id)
+                    )
+                    max_seq = seq_result.scalar() or 0
+                    next_seq = max_seq + 1
+                    event_id = f"asr_{uuid.uuid4().hex[:16]}"
+                    ai_event = AIEvent(
+                        id=event_id,
+                        room_id=self.room_id,
+                        seq=next_seq,
+                        event_type="asr",
+                        text=transcript,
+                        lang=self.lang,
+                        meta={
+                            "speaker_identity": speaker_id,
+                            "speaker_name": self._last_speaker_name,
+                            "speaker_lang": self._last_speaker_lang,
+                            "member_id": member_id,
+                            "session_lang": self.lang,
+                        },
+                        created_at=datetime.utcnow(),
+                    )
+                    session.add(ai_event)
+                    try:
+                        await session.commit()
+                        print(
+                            "🧾 [STT] saved ai_event "
+                            f"room_id={self.room_id} seq={next_seq} "
+                            f"member_id={member_id} lang={self.lang}"
                         )
                         return
                     except IntegrityError:
