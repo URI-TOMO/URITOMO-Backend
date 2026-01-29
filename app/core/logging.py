@@ -178,6 +178,42 @@ class RequestLoggingMiddleware:
             )
 
 
+class WebSocketLoggingMiddleware:
+    """Middleware to log WebSocket connect/close events"""
+
+    def __init__(self, app):
+        self.app = app
+        self.logger = logging.getLogger("uritomo.ws")
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "websocket":
+            await self.app(scope, receive, send)
+            return
+
+        client = scope.get("client") or (None, None)
+        path = scope.get("path")
+        query_string = scope.get("query_string", b"").decode("utf-8")
+        accepted = False
+
+        async def send_with_ws_status(message):
+            nonlocal accepted
+            if message["type"] == "websocket.accept":
+                accepted = True
+                self.logger.info(
+                    f"🧩 WS Accept | Path: {path} | Client: {client[0]} | QS: {query_string}"
+                )
+            elif message["type"] == "websocket.close":
+                code = message.get("code")
+                emoji = "✅" if accepted else "❌"
+                self.logger.info(
+                    f"{emoji} WS Close | Path: {path} | Code: {code} | Client: {client[0]}"
+                )
+            await send(message)
+
+        self.logger.info(f"🔌 WS Incoming | Path: {path} | Client: {client[0]} | QS: {query_string}")
+        await self.app(scope, receive, send_with_ws_status)
+
+
 class LatencyLogger:
     """Context manager for logging operation latency"""
 
