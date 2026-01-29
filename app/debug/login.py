@@ -50,7 +50,7 @@ async def debug_login(
     refresh_token = create_refresh_token(data={"sub": user.id})
     
     # 3. Save Refresh Token to DB (Optional but good for consistency)
-    refresh_expire = datetime.utcnow() + timedelta(days=settings.refresh_token_expire_days)
+    refresh_expire = datetime.utcnow() + timedelta(minutes=settings.refresh_token_expire_minutes)
     token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
 
     db_token = AuthToken(

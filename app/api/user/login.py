@@ -3,11 +3,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, EmailStr
 from uuid import uuid4
+from datetime import datetime, timedelta
+import hashlib
 
 from app.infra.db import get_db
 from app.models.user import User
+from app.models.token import AuthToken
 from app.core.security import get_password_hash, verify_password
 from app.core.token import create_access_token, create_refresh_token
+from app.core.config import settings
 from app.core.errors import AppError, AuthenticationError, ValidationError
 
 router = APIRouter(tags=["auth"])
@@ -79,6 +83,17 @@ async def signup(
     # 3. Generate tokens
     access_token = create_access_token(data={"sub": new_user.id})
     refresh_token = create_refresh_token(data={"sub": new_user.id})
+    token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
+
+    # 4. Persist refresh token (non-debug login)
+    db.add(AuthToken(
+        id=str(uuid4()),
+        user_id=new_user.id,
+        token_hash=token_hash,
+        issued_at=datetime.utcnow(),
+        expires_at=datetime.utcnow() + timedelta(minutes=settings.refresh_token_expire_minutes),
+    ))
+    await db.commit()
 
     return TokenResponse(
         access_token=access_token,
@@ -110,6 +125,17 @@ async def general_login(
     # 3. Generate tokens
     access_token = create_access_token(data={"sub": user.id})
     refresh_token = create_refresh_token(data={"sub": user.id})
+    token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
+
+    # 4. Persist refresh token (non-debug login)
+    db.add(AuthToken(
+        id=str(uuid4()),
+        user_id=user.id,
+        token_hash=token_hash,
+        issued_at=datetime.utcnow(),
+        expires_at=datetime.utcnow() + timedelta(minutes=settings.refresh_token_expire_minutes),
+    ))
+    await db.commit()
 
     return TokenResponse(
         access_token=access_token,
