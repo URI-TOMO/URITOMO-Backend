@@ -10,7 +10,7 @@ from app.models.message import ChatMessage
 
 router = APIRouter()
 
-@router.post("/summary/setup-mock", tags=["debug"])
+@router.post("/debug/summary/setup-mock", tags=["debug"])
 async def setup_summary_mock_data(
     room_id: str = Query("mock-room-summary", description="Room ID to setup mock summary data for"),
     user_id: str = Query("test-user-id", description="Developer user ID"),

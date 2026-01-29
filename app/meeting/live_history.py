@@ -8,9 +8,9 @@ from app.core.token import CurrentUserDep
 from app.core.errors import AppError
 from app.models.room import RoomLiveSession, RoomMember
 from app.models.message import ChatMessage
-from app.meeting.api import SuccessResponse
+from app.meeting.schemas import SuccessResponse
 
-router = APIRouter(prefix="/meeting", tags=["meeting"])
+router = APIRouter(prefix="/meeting", tags=["meetings"])
 
 @router.get("/{session_id}/messages", response_model=SuccessResponse)
 async def get_session_messages(

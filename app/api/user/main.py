@@ -16,12 +16,13 @@ router = APIRouter()
 
 class UserMainInfo(BaseModel):
     display_name: str
-    email: Optional[EmailStr]
+    email: Optional[str]
+    lang: Optional[str]
 
 class FriendInfo(BaseModel):
     id: str
     friend_name: str
-    email: Optional[EmailStr]
+    email: Optional[str]
 
 class RoomInfo(BaseModel):
     id: str
@@ -49,59 +50,69 @@ async def get_main_page_data(
     - Joined rooms (id, title)
     """
     
-    # 1. Fetch User
-    user_stmt = select(User).where(User.id == user_id)
-    user_result = await db.execute(user_stmt)
-    user = user_result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    try:
+        # 1. Fetch User
+        print(f"DEBUG: Fetching main page data for user_id: {user_id}")
+        user_stmt = select(User).where(User.id == user_id)
+        user_result = await db.execute(user_stmt)
+        user = user_result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
 
-    # 2. Fetch Friends
-    # We join with User to get friend's email and actual display_name
-    # Since UserFriend can have requester as me or addressee as me:
-    friend_stmt = (
-        select(UserFriend, User)
-        .join(User, or_(
-            (UserFriend.requester_id == User.id) & (UserFriend.addressee_id == user_id),
-            (UserFriend.addressee_id == User.id) & (UserFriend.requester_id == user_id)
-        ))
-        .where(
-            or_(UserFriend.requester_id == user_id, UserFriend.addressee_id == user_id),
-            UserFriend.status == "accepted"
+        # 2. Fetch Friends
+        print("DEBUG: Fetching friends...")
+        friend_stmt = (
+            select(UserFriend)
+            .where(
+                or_(UserFriend.requester_id == user_id, UserFriend.addressee_id == user_id),
+                UserFriend.status == "accepted"
+            )
         )
-    )
-    friends_result = await db.execute(friend_stmt)
-    friends_rows = friends_result.all()
+        friends_result = await db.execute(friend_stmt)
+        friendships = friends_result.scalars().all()
 
-    total_friends = len(friends_rows)
-    friends_list = []
-    for f_row, u_row in friends_rows:
-        # custom friend_name from UserFriend table or display_name from User table
-        name = f_row.friend_name or u_row.display_name
-        friends_list.append(FriendInfo(
-            id=u_row.id,
-            friend_name=name,
-            email=u_row.email
-        ))
+        total_friends = len(friendships)
+        friends_list = []
+        
+        for friendship in friendships:
+            friend_id = friendship.addressee_id if friendship.requester_id == user_id else friendship.requester_id
+            
+            friend_user_stmt = select(User).where(User.id == friend_id)
+            friend_user_result = await db.execute(friend_user_stmt)
+            friend_user = friend_user_result.scalar_one_or_none()
+            
+            if friend_user:
+                name = friendship.friend_name or friend_user.display_name
+                friends_list.append(FriendInfo(
+                    id=friend_user.id,
+                    friend_name=name,
+                    email=friend_user.email
+                ))
 
-    # 3. Fetch Rooms
-    # Rooms where the user is a member
-    room_stmt = (
-        select(Room)
-        .join(RoomMember, Room.id == RoomMember.room_id)
-        .where(RoomMember.user_id == user_id, Room.status == "active")
-    )
-    rooms_result = await db.execute(room_stmt)
-    rooms = rooms_result.scalars().all()
-    
-    room_list = [
-        RoomInfo(id=r.id, name=r.title or "Untitled Room") 
-        for r in rooms
-    ]
+        # 3. Fetch Rooms
+        print("DEBUG: Fetching rooms...")
+        room_stmt = (
+            select(Room)
+            .join(RoomMember, Room.id == RoomMember.room_id)
+            .where(RoomMember.user_id == user_id, Room.status == "active")
+        )
+        rooms_result = await db.execute(room_stmt)
+        rooms = rooms_result.scalars().all()
+        
+        room_list = [
+            RoomInfo(id=r.id, name=r.title or "Untitled Room") 
+            for r in rooms
+        ]
 
-    return MainPageResponse(
-        user=UserMainInfo(display_name=user.display_name, email=user.email),
-        friend_count=total_friends,
-        user_friends=friends_list,
-        rooms=room_list
-    )
+        print("DEBUG: Successfully assembled MainPageResponse")
+        return MainPageResponse(
+            user=UserMainInfo(display_name=user.display_name, email=user.email, lang=user.locale),
+            friend_count=total_friends,
+            user_friends=friends_list,
+            rooms=room_list
+        )
+    except Exception as e:
+        print(f"ERROR in get_main_page_data: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise e

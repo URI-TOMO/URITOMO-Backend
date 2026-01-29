@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     deepl_api_key: Optional[str] = None
     deepl_api_url: str = "https://api-free.deepl.com/v2/translate"
 
+    # LiveKit
+    livekit_url: Optional[str] = None
+    livekit_api_key: Optional[str] = None
+    livekit_api_secret: Optional[str] = None
+
     # Translation Settings
     translation_provider: Literal["OPENAI", "DEEPL", "MOCK"] = "MOCK"
     default_source_lang: str = "ja"
@@ -101,11 +106,14 @@ class Settings(BaseSettings):
     worker_queues: list[str] = ["default", "high", "low"]
     worker_result_ttl: int = 3600
     worker_job_timeout: int = 600
+    worker_service_key: Optional[str] = None
 
     # CORS
     cors_origins: list[str] = [
         "http://localhost:3000",
         "http://localhost:8080",
+        "http://localhost:8000",
+        "http://localhost:5173",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:8080",
     ]

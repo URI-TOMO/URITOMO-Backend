@@ -141,6 +141,35 @@ services:
     networks:
       - uritomo_network
 
+  # Streamlit Dashboard
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: uritomo_dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+      - /app/.venv
+    environment:
+      DATABASE_URL: mysql+aiomysql://${MYSQL_USER:-uritomo_user}:${MYSQL_PASSWORD:-uritomo_pass}@mysql:3306/${MYSQL_DATABASE:-uritomo}
+      ENV: ${ENV:-development}
+      DEBUG: ${DEBUG:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command: >
+      streamlit run app/dashboard/data_app.py
+      --server.baseUrlPath dashboard
+      --server.port 8501
+      --server.headless true
+      --server.address 0.0.0.0
+    networks:
+      - uritomo_network
+
   # Background Worker for async jobs
   worker:
     build:
@@ -169,6 +198,53 @@ services:
       qdrant:
         condition: service_healthy
     command: python -m app.workers.worker
+    networks:
+      - uritomo_network
+    profiles:
+      - with-worker
+
+  # LiveKit Realtime Agent (OpenAI Realtime WebSocket)
+  livekit_realtime_agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: uritomo_livekit_realtime_agent
+    volumes:
+      - .:/app
+      - /app/.venv
+    environment:
+      PYTHONPATH: /app
+      BACKEND_URL: ${LIVEKIT_BACKEND_URL:-http://api:8000}
+      ROOM_ID: ${LIVEKIT_ROOM_ID:-}
+      SERVICE_AUTH: ${LIVEKIT_SERVICE_AUTH:-}
+      WORKER_SERVICE_KEY: ${WORKER_SERVICE_KEY:-}
+      WORKER_ID: ${LIVEKIT_WORKER_ID:-livekit_worker}
+      WORKER_TOKEN_TTL_SECONDS: ${LIVEKIT_WORKER_TOKEN_TTL_SECONDS:-0}
+      AUTO_SUBSCRIBE: ${LIVEKIT_AUTO_SUBSCRIBE:-true}
+      LIVEKIT_FORCE_RELAY: ${LIVEKIT_FORCE_RELAY:-false}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      LIVEKIT_ROOM_EVENTS_CHANNEL: ${LIVEKIT_ROOM_EVENTS_CHANNEL:-livekit:rooms}
+      LIVEKIT_KO_TRACK: ${LIVEKIT_KO_TRACK:-lk.out.ko}
+      LIVEKIT_JA_TRACK: ${LIVEKIT_JA_TRACK:-lk.out.ja}
+      LIVEKIT_UNKNOWN_LANG_POLICY: ${LIVEKIT_UNKNOWN_LANG_POLICY:-both}
+      TOKEN_FETCH_MAX_ATTEMPTS: ${TOKEN_FETCH_MAX_ATTEMPTS:-2}
+      TOKEN_FETCH_RETRY_SECONDS: ${TOKEN_FETCH_RETRY_SECONDS:-2}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_REALTIME_MODEL: ${OPENAI_REALTIME_MODEL:-gpt-realtime}
+      OPENAI_REALTIME_URL: ${OPENAI_REALTIME_URL:-wss://api.openai.com/v1/realtime}
+      OPENAI_REALTIME_TRANSCRIBE_MODEL: ${OPENAI_REALTIME_TRANSCRIBE_MODEL:-gpt-4o-mini-transcribe}
+      OPENAI_REALTIME_VAD_THRESHOLD: ${OPENAI_REALTIME_VAD_THRESHOLD:-0.5}
+      OPENAI_REALTIME_VAD_PREFIX_MS: ${OPENAI_REALTIME_VAD_PREFIX_MS:-300}
+      OPENAI_REALTIME_VAD_SILENCE_MS: ${OPENAI_REALTIME_VAD_SILENCE_MS:-500}
+      OPENAI_WAKE_PHRASES: ${OPENAI_WAKE_PHRASES:-하이 에이전트,하이에이전트,ハイエージェント}
+      OPENAI_WAKE_COOLDOWN_SECONDS: ${OPENAI_WAKE_COOLDOWN_SECONDS:-2.0}
+    depends_on:
+      api:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    command: python workers/realtime_agent.py
     networks:
       - uritomo_network
 

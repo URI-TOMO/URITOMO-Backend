@@ -16,11 +16,25 @@ router = APIRouter(tags=["auth"])
 
 class SignupRequest(BaseModel):
     name: str
-    email: EmailStr
+    email: str
     password: str
+    lang: str
+
+
+def _normalize_lang(value: str) -> str:
+    lowered = value.strip().lower()
+    if lowered in {"kr", "kor", "korea"}:
+        return "ko"
+    if lowered in {"jp", "jpn", "japan"}:
+        return "ja"
+    if lowered.startswith("ko"):
+        return "ko"
+    if lowered.startswith("ja"):
+        return "ja"
+    return ""
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str
     password: str
 
 class TokenResponse(BaseModel):
@@ -45,11 +59,16 @@ async def signup(
     if result.scalar_one_or_none():
         raise ValidationError("User with this email already exists")
 
+    lang = _normalize_lang(data.lang)
+    if not lang:
+        raise ValidationError("lang must be one of ko/ja (or kr/jp)")
+
     # 2. Create new user
     new_user = User(
         id=str(uuid4()),
         email=data.email,
         display_name=data.name,
+        locale=lang,
         hashed_password=get_password_hash(data.password),
         status="active"
     )

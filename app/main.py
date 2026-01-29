@@ -4,7 +4,8 @@ FastAPI Application Entry Point
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
 
@@ -19,7 +20,7 @@ from app.core.errors import (
     validation_exception_handler,
     general_exception_handler,
 )
-from app.core.logging import setup_logging, RequestIDMiddleware
+from app.core.logging import setup_logging, RequestIDMiddleware, RequestLoggingMiddleware, WebSocketLoggingMiddleware
 from app.infra.db import close_db_connection
 from app.infra.redis import init_redis_pool, close_redis_pool
 from app.infra.qdrant import init_qdrant_client, close_qdrant_client, ensure_collections_exist
@@ -56,29 +57,12 @@ tags_metadata = [
         "description": "Debug tools for seeding data and testing.",
     },
     {
-        "name": "Example Token Auth",
-        "description": "Tokens for testing authentication. Get your debug token here!",
-    },
-    {
-        "name": "Example CRUD",
-        "description": "Quickly setup users and mock data for development.",
-    },
-    {
         "name": "auth",
         "description": "Standard Authentication operations (Login, Register).",
-    },
-
-    {
-        "name": "orgs",
-        "description": "Manage Organizations and their glossaries.",
     },
     {
         "name": "meetings",
         "description": "Create and manage translation meetings.",
-    },
-    {
-        "name": "segments",
-        "description": "Ingest and process transcript segments.",
     },
     {
         "name": "websocket",
@@ -117,7 +101,9 @@ URITOMO API provides real-time translation with cultural context explanations.
 
 
     # Middleware
+    app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(WebSocketLoggingMiddleware)
     
     # Handle CORS
     # Note: allow_origins=["*"] cannot be used with allow_credentials=True
@@ -139,6 +125,13 @@ URITOMO API provides real-time translation with cultural context explanations.
             "status": "operational"
         }
 
+    @app.get("/dashboard", include_in_schema=False)
+    @app.get("/dashboard/", include_in_schema=False)
+    async def dashboard_redirect(request: Request):
+        host = request.headers.get("host", "localhost:8000")
+        hostname = host.split(":")[0]
+        target = f"http://{hostname}:8501/dashboard"
+        return RedirectResponse(url=target, status_code=307)
 
     # Routes
 

@@ -122,6 +122,98 @@ class RequestIDMiddleware:
         await self.app(scope, receive, send_with_request_id)
 
 
+class RequestLoggingMiddleware:
+    """Middleware to log every HTTP request/response"""
+
+    def __init__(self, app):
+        self.app = app
+        self.logger = get_logger("app.request")
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        start_time = time.time()
+        status_code = None
+        client = scope.get("client") or (None, None)
+        query_string = scope.get("query_string", b"").decode("utf-8")
+
+        self.logger.info(
+            "request.start",
+            method=scope.get("method"),
+            path=scope.get("path"),
+            query_string=query_string,
+            client_host=client[0],
+        )
+
+        async def send_with_status(message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message.get("status")
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_with_status)
+        except Exception as exc:
+            self.logger.exception(
+                "request.error",
+                method=scope.get("method"),
+                path=scope.get("path"),
+                query_string=query_string,
+                client_host=client[0],
+                error=str(exc),
+            )
+            raise
+        finally:
+            duration_ms = (time.time() - start_time) * 1000
+            self.logger.info(
+                "request.end",
+                method=scope.get("method"),
+                path=scope.get("path"),
+                query_string=query_string,
+                status_code=status_code or 500,
+                duration_ms=round(duration_ms, 2),
+                client_host=client[0],
+            )
+
+
+class WebSocketLoggingMiddleware:
+    """Middleware to log WebSocket connect/close events"""
+
+    def __init__(self, app):
+        self.app = app
+        self.logger = logging.getLogger("uritomo.ws")
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "websocket":
+            await self.app(scope, receive, send)
+            return
+
+        client = scope.get("client") or (None, None)
+        path = scope.get("path")
+        query_string = scope.get("query_string", b"").decode("utf-8")
+        accepted = False
+
+        async def send_with_ws_status(message):
+            nonlocal accepted
+            if message["type"] == "websocket.accept":
+                accepted = True
+                self.logger.info(
+                    f"🧩 WS Accept | Path: {path} | Client: {client[0]} | QS: {query_string}"
+                )
+            elif message["type"] == "websocket.close":
+                code = message.get("code")
+                emoji = "✅" if accepted else "❌"
+                self.logger.info(
+                    f"{emoji} WS Close | Path: {path} | Code: {code} | Client: {client[0]}"
+                )
+            await send(message)
+
+        self.logger.info(f"🔌 WS Incoming | Path: {path} | Client: {client[0]} | QS: {query_string}")
+        await self.app(scope, receive, send_with_ws_status)
+
+
 class LatencyLogger:
     """Context manager for logging operation latency"""
 

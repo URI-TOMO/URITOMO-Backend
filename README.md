@@ -1,353 +1,251 @@
 # URITOMO Backend
 
-Real-time translation service with cultural context and RAG-powered explanations for multilingual meetings.
+Backend for real-time multilingual meetings, LiveKit-based sessions, and translation/summarization workflows.
 
-## 🎯 Overview
+## Overview
 
-URITOMO provides:
-- **Real-time translation** via WebSocket with streaming support
-- **Cultural context explanations** using RAG (Retrieval-Augmented Generation)
-- **Meeting summaries** with action items and decisions
-- **Organization glossaries** for domain-specific terminology
-- **Hybrid explanation triggers** (rule-based + AI-powered)
+URITOMO backend provides:
+- User authentication and profile data for meeting apps
+- Room/meeting lifecycle and live session tracking
+- WebSocket channel for real-time session chat
+- Translation API (DeepL or mock) with event storage
+- Summary endpoints (currently mock responses)
+- LiveKit token issuance for clients and workers
+- Optional background workers (RQ + LiveKit realtime agent)
 
-## 🚀 Quick Start (Docker)
+## Tech Stack
 
-If you already have Docker installed, follow these steps to quickly run the services.
+- FastAPI + Uvicorn
+- MySQL 8 + SQLAlchemy + Alembic
+- Redis + RQ
+- Qdrant (vector store, optional)
+- MinIO (optional object storage)
+- LiveKit (real-time audio sessions)
+- OpenAI / DeepL (optional external providers)
 
-### 1. Environment Configuration (.env)
-Copy the example environment file to create your own.
+## Services (Docker Compose)
+
+- `mysql`: MySQL 8
+- `redis`: Redis for cache/queues
+- `qdrant`: vector database
+- `minio`: optional object storage (profile: `with-storage`)
+- `api`: FastAPI application
+- `worker`: RQ worker (profile: `with-worker`, entrypoint not included in this repo)
+- `livekit_realtime_agent`: LiveKit + OpenAI realtime worker
+
+Note: `docker-compose.yml` also defines `livekit_sniffer` and `livekit_publisher` commands that expect
+`workers/audio_sniffer.py` and `workers/publish_dual_outputs.py`. Those files are not in this repo.
+Remove or comment out those services if you do not have the scripts.
+
+## Quick Start (Docker)
+
+### 1) Configure environment
 
 ```bash
 cp .env.example .env
 ```
 
-Open the `.env` file and configure your external API keys (OpenAI, DeepL, etc.). Even without API keys, you can perform local testing by setting `TRANSLATION_PROVIDER=MOCK`.
+Set at minimum:
+- `JWT_SECRET_KEY` (at least 32 chars)
+- External provider keys (if not using mock)
 
-### 2. Start Services
-
-You can use the `Makefile` to complete all configurations at once:
-
-```bash
-# Performs initial build, execution, DB migrations, and sample data seeding.
-make init
-```
-
-Or to use Docker commands directly:
+### 2) Build and start services
 
 ```bash
-# Build and start containers
-docker-compose up -d --build
-
-# Create DB tables
-docker-compose exec api alembic upgrade head
-
-# Insert sample data (cultural guides, etc.)
-docker-compose exec api python scripts/seed_culture_cards.py
+make build
+make up
 ```
 
-### 3. Verification & Access
+### 3) Run migrations
 
-Once services are running, you can access them at:
-- **FastAPI Server**: [http://localhost:8000](http://localhost:8000)
-- **API Documentation (Swagger)**: [http://localhost:8000/docs](http://localhost:8000/docs)
-- **Qdrant (Vector DB)**: [http://localhost:6333/dashboard](http://localhost:6333/dashboard)
-
-To check logs while running:
 ```bash
-make logs
-# or
-docker-compose logs -f
+make migrate
 ```
 
-### 4. Stopping the Server
-To stop all running services:
+### 4) Optional seed (if scripts exist)
 
-**Mac / Linux:**
+```bash
+make seed
+```
+
+The seed target expects `scripts/seed_*.py`, which are not present in this repo.
+
+### 5) Access
+
+- API: http://localhost:8000
+- Swagger: http://localhost:8000/docs
+- Qdrant dashboard: http://localhost:6333/dashboard
+
+### 6) Stop services
+
 ```bash
 make down
 ```
 
-**Windows:**
-```powershell
-docker-compose down
+## Local Development (Poetry)
+
+```bash
+make install
 ```
 
----
-## 💻 Running on Windows
-
-Since `make` is not natively available on Windows, you have a few options:
-
-### Option 1: WSL2 (Recommended)
-If you have **WSL2 (Windows Subsystem for Linux)** installed:
-1. Open your WSL terminal (e.g., Ubuntu).
-2. Follow the Mac/Linux instructions exactly (`make init`).
-
-### Option 2: Manual Commands (PowerShell / CMD)
-If you don't have `make`, run these commands in order:
-
-1. **Build & Start**:
-   ```powershell
-   docker-compose build --no-cache
-   docker-compose up -d
-   ```
-
-2. **Run Migrations**:
-   ```powershell
-   docker-compose exec api alembic upgrade head
-   ```
-
-3. **Seed Data**:
-   ```powershell
-   docker-compose exec api python scripts/seed_culture_cards.py
-   docker-compose exec api python scripts/seed_glossary.py
-   ```
-
----
-
-## 👨‍💻 Git Conventions
-
-### Branch Naming
-Follow this format: `[type]/[description]`
-
-| Type | Description | Example |
-|------|-------------|---------|
-| `feature` | New features | `feature/user-auth` |
-| `fix` | Bug fixes | `fix/login-error` |
-| `hotfix` | Critical production fixes | `hotfix/security-patch` |
-| `chore` | Maintenance, config changes | `chore/update-dependencies` |
-| `docs` | Documentation updates | `docs/api-guide` |
-| `refactor` | Code restructuring | `refactor/segment-logic` |
-
-### Commit Messages
-Follow the [Conventional Commits](https://www.conventionalcommits.org/) specification:
-
-**Format**: `[Type]: [Description]`
-
-- **feat**: A new feature
-- **fix**: A bug fix
-- **docs**: Documentation only changes
-- **style**: Changes that do not affect the meaning of the code (white-space, formatting, etc)
-- **refactor**: A code change that neither fixes a bug nor adds a feature
-- **perf**: A code change that improves performance
-- **test**: Adding missing tests or correcting existing tests
-- **chore**: Changes to the build process or auxiliary tools and libraries
-
-**Examples**:
-- `feat: add real-time translation websocket endpoint`
-- `fix: resolve crash when Qdrant is unavailable`
-- `chore: update poetry dependencies`
-
----
-
-## 🛠 Tech Stack
-
-- **Framework**: FastAPI + Uvicorn
-- **Database**: MySQL 8.0 + SQLAlchemy 2.0 + Alembic
-- **Cache/Queue**: Redis + RQ
-- **Vector DB**: Qdrant
-- **Storage**: MinIO (optional)
-- **AI**: OpenAI GPT-4 / DeepL (with mock mode for development)
-
-GET    /api/v1/meetings/{id}/summary  - Get meeting summary
+Start infra locally (example):
+```bash
+docker-compose up -d mysql redis qdrant
 ```
 
-#### WebSocket
-```
-WS     /api/v1/ws/realtime?token=<JWT>&meeting_id=<ID>
-```
-
-**Client → Server messages:**
-```json
-{
-  "type": "segment.ingest",
-  "data": {
-    "meeting_id": "uuid",
-    "speaker": "John",
-    "lang": "ja",
-    "text": "検討します",
-    "ts": 1234567890
-  }
-}
+Run the API and (optional) worker:
+```bash
+make run-local
+make worker-local
 ```
 
-**Server → Client messages:**
-```json
-{
-  "type": "translation.final",
-  "data": {
-    "segment_id": "uuid",
-    "translated_text": "검토하겠습니다",
-    "explanation_text": "일본 비즈니스 문화에서 '검토합니다'는...",
-    "confidence": 0.95
-  }
-}
+The worker entrypoint referenced by `make worker-local` is not included in this repo.
+
+## Configuration
+
+Key environment variables (see `app/core/config.py` for full list):
+
+- `API_PREFIX` (default empty; use `/api/v1` if you want a versioned prefix)
+- `JWT_SECRET_KEY`, `JWT_ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES`
+- `DATABASE_URL` (or `MYSQL_*` when using compose)
+- `REDIS_URL`
+- `QDRANT_URL` / `QDRANT_HOST` / `QDRANT_PORT`
+- `TRANSLATION_PROVIDER` = `MOCK` | `DEEPL` | `OPENAI`
+- `OPENAI_API_KEY`, `DEEPL_API_KEY`
+- `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`
+- `WORKER_SERVICE_KEY` (used by `/worker/token`)
+- `CORS_ORIGINS`
+
+## API Overview
+
+Base URL is `http://localhost:8000` unless `API_PREFIX` is set.
+Most endpoints require `Authorization: Bearer <JWT>`.
+
+Auth:
+- `POST /signup`
+- `POST /general_login`
+
+User, rooms, and friends:
+- `GET /user/main`
+- `GET /rooms/{room_id}`
+- `POST /rooms/{room_id}/members`
+- `POST /user/friend/add`
+
+Meetings and sessions:
+- `POST /meeting/{room_id}/live-sessions/{session_id}`
+- `POST /meeting/{room_id}/live-sessions/{session_id}/leave`
+- `GET /meeting/{session_id}/messages`
+- `POST /meeting/livekit/token`
+
+Translation:
+- `POST /translation/translate`
+
+Summary (mock responses):
+- `POST /summary/{room_id}`
+- `POST /summarization/{room_id}`
+- `POST /meeting_member/{room_id}`
+- `POST /translation_log/{room_id}`
+- `POST /debug/summary/setup-mock`
+
+Worker tokens:
+- `POST /worker/token`
+
+Debug:
+- `GET /debug/user_info`
+- `DELETE /debug/clear`
+
+See Swagger for full details.
+
+## WebSocket
+
+Meeting session socket:
+- `WS /meeting/{session_id}?token=<JWT>`
+
+Server messages include `session_connected`, `pong`, and `unknown_type`.
+Client messages include `chat` (requires auth) and `ping`.
+
+## Background Workers
+
+- RQ worker: `make worker` (Docker) or `make worker-local` (requires your own worker entrypoint)
+- LiveKit realtime agent: `python workers/realtime_agent.py`
+
+The realtime agent expects LiveKit + OpenAI Realtime environment variables
+(see `.env.example` for defaults).
+
+## Data Viewer (Streamlit)
+
+There is a simple MySQL viewer at `app/dashboard/data_app.py`.
+
+```bash
+poetry run streamlit run app/dashboard/data_app.py
 ```
 
-## 🗂 Project Structure
+## Project Structure
 
 ```
 URITOMO-Backend/
 ├── app/
-│   ├── main.py                 # FastAPI application entry
-│   ├── core/                   # Core configurations
-│   │   ├── config.py
-│   │   ├── security.py
-│   │   ├── logging.py
-│   │   └── deps.py
-│   ├── api/v1/                 # API endpoints
-│   │   ├── core/               # Core services (Auth, Orgs, Meetings)
-│   │   │   ├── auth.py
-│   │   │   ├── health.py
-│   │   │   ├── meetings.py
-│   │   │   └── orgs.py
-│   │   ├── ai/                 # AI features (Segments, Realtime)
-│   │   │   ├── segments.py
-│   │   │   └── ws_realtime.py
-│   │   └── examples/           # Verification examples
-│   ├── models/                 # SQLAlchemy models
-│   ├── schemas/                # Pydantic schemas
-│   ├── services/               # Business logic
-│   │   ├── translation_service.py
-│   │   ├── explanation_service.py
-│   │   ├── summary_service.py
-│   │   ├── rag_service.py
-│   │   └── llm_clients/
-│   ├── infra/                  # Infrastructure
-│   │   ├── db.py
-│   │   ├── redis.py
-│   │   ├── qdrant.py
-│   │   └── queue.py
-│   ├── workers/                # Background jobs
-│   │   └── jobs/
-│   └── prompts/                # LLM prompts
-├── migrations/                 # Alembic migrations
-├── scripts/                    # Utility scripts
-├── tests/                      # Test suite
+│   ├── api/                 # REST API routers
+│   ├── core/                # Config, auth, logging, errors
+│   ├── debug/               # Debug endpoints
+│   ├── infra/               # DB/Redis/Qdrant clients
+│   ├── meeting/             # Rooms, sessions, LiveKit, websockets
+│   ├── models/              # SQLAlchemy models
+│   ├── summarization/       # Summary helpers
+│   ├── translation/         # Translation services
+│   ├── user/                # User/DM/room helpers
+│   ├── worker/              # Worker token API
+│   └── main.py              # FastAPI app entry
+├── migrations/              # Alembic migrations
+├── workers/                 # LiveKit/OpenAI realtime worker
 ├── docker-compose.yml
 ├── Dockerfile
 ├── Makefile
 └── pyproject.toml
 ```
 
-## 🧪 Development
-
-### Code Quality
+## Make Commands
 
 ```bash
-# Format code
+make help
+make up
+make up-storage
+make down
+make restart
+make logs
+make logs-api
+make logs-worker
+make ps
+make clean
+make build
+
+make migrate
+make migrate-create name=your_migration_name
+make migrate-downgrade
+make seed
+make db-shell
+
+make lint
 make format
 
-# Run linters
-make lint
+make shell
+make shell-bash
+make worker
+make install
+make run-local
+make worker-local
+make init
 ```
 
-### Database Migrations
+## Git Conventions
 
-```bash
-# Create new migration
-make migrate-create name=add_new_field
+Branch naming: `[type]/[description]`
 
-# Apply migrations
-make migrate
+Examples: `feature/user-auth`, `fix/login-error`, `docs/api-guide`
 
-# Rollback last migration
-make migrate-downgrade
-```
+Commit messages follow Conventional Commits:
+`feat: add real-time translation websocket endpoint`
 
-### Background Worker
+## License
 
-```bash
-# View worker logs
-make logs-worker
-
-# Restart worker
-docker-compose restart worker
-```
-
-## 🔧 Configuration
-
-### Mock Mode (No API Keys Required)
-
-Set in `.env`:
-```bash
-TRANSLATION_PROVIDER=MOCK
-EMBEDDING_PROVIDER=MOCK
-SUMMARY_PROVIDER=MOCK
-```
-
-### Production Mode
-
-Set in `.env`:
-```bash
-TRANSLATION_PROVIDER=OPENAI  # or DEEPL
-OPENAI_API_KEY=sk-...
-DEEPL_API_KEY=...
-EMBEDDING_PROVIDER=OPENAI
-```
-
-## 📝 Available Make Commands
-
-```bash
-make help              # Show all commands
-make up                # Start services
-make down              # Stop services
-make logs              # View all logs
-make migrate           # Run migrations
-make seed              # Seed sample data
-make test              # Run tests
-make clean             # Clean all containers & volumes
-```
-
-## 🌐 WebSocket Protocol
-
-### Connection
-```javascript
-const ws = new WebSocket('ws://localhost:8000/api/v1/ws/realtime?token=YOUR_JWT&meeting_id=MEETING_ID');
-```
-
-### Message Types
-
-**Client → Server:**
-- `segment.ingest`: Send new transcript segment
-- `settings.update`: Update translation settings
-
-**Server → Client:**
-- `segment.ack`: Acknowledgment
-- `translation.partial`: Streaming translation chunk
-- `translation.final`: Complete translation with explanation
-- `error`: Error message
-
-## 🎓 RAG & Cultural Cards
-
-The system includes 50+ pre-seeded cultural cards for Japanese business expressions:
-
-- "検討します" → Often means "no" in polite form
-- "頑張ります" → Commitment expression, context matters
-- "よろしくお願いします" → Multi-purpose greeting/request
-
-Customize with your own cards using `scripts/seed_culture_cards.py`.
-
-## 📊 Monitoring
-
-- **Logs**: `make logs` or `make logs-api`
-- **Health**: `curl http://localhost:8000/api/v1/health`
-- **Metrics**: (Coming soon: Prometheus integration)
-
-## 🤝 Contributing
-
-1. Create feature branch
-2. Make changes
-3. Run `make format` and `make lint`
-4. Run `make test`
-5. Submit PR to the `dev` branch (Do NOT merge directly into `main`)
-
-## 📄 License
-
-[Your License Here]
-
-## 🔗 Links
-
-- [API Documentation](http://localhost:8000/docs)
-- [Qdrant Docs](https://qdrant.tech/documentation/)
-- [FastAPI Docs](https://fastapi.tiangolo.com/)
+MIT. See `LICENSE`.

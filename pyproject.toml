@@ -47,11 +47,14 @@ deepl = "^1.16.1"
 openai = "^1.10.0"
 httpx = "^0.26.0"
 aiohttp = "^3.9.1"
+livekit-api = "^1.1.0"
+livekit = "^1.0.23"
 
 # Utilities
 python-dotenv = "^1.0.0"
 tenacity = "^8.2.3"
 pytz = "^2024.1"
+streamlit = "^1.32.0"
 
 # Logging & Monitoring
 structlog = "^24.1.0"
