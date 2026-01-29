@@ -5,7 +5,7 @@ from typing import Optional
 from sqlalchemy import select, func
 from app.infra.db import AsyncSessionLocal
 from app.models.message import ChatMessage
-from app.models.room import RoomMember, RoomLiveSession
+from app.models.room import RoomMember
 from app.models.ai import AIEvent
 from app.meeting.ws.manager import manager
 from app.translation.deepl_service import deepl_service
@@ -13,7 +13,7 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-async def handle_chat_message(session_id: str, user_id: str, data: dict):
+async def handle_chat_message(room_id: str, user_id: str, data: dict):
     """
     Handle incoming chat message:
     1. Validate data
@@ -29,17 +29,7 @@ async def handle_chat_message(session_id: str, user_id: str, data: dict):
         return
     
     async with AsyncSessionLocal() as db_session:
-        # 1. Get Session and Room ID
-        session_result = await db_session.execute(
-            select(RoomLiveSession).where(RoomLiveSession.id == session_id)
-        )
-        live_session = session_result.scalar_one_or_none()
-        if not live_session:
-            return
-        
-        room_id = live_session.room_id
-
-        # 2. Get RoomMember ID for this user
+        # 1. Get RoomMember ID for this user
         member_result = await db_session.execute(
             select(RoomMember).where(
                 RoomMember.room_id == room_id,
@@ -91,7 +81,7 @@ async def handle_chat_message(session_id: str, user_id: str, data: dict):
                 "created_at": new_message.created_at.isoformat()
             }
         }
-        await manager.broadcast(session_id, broadcast_data)
+        await manager.broadcast(room_id, broadcast_data)
 
         # 6. Perform Translation (Sync/Async)
         # DeepL translate is synchronous in our service currently, but it's fine for now 
@@ -178,7 +168,7 @@ async def handle_chat_message(session_id: str, user_id: str, data: dict):
                 }
             }
             
-            await manager.broadcast(session_id, trans_broadcast_data)
+            await manager.broadcast(room_id, trans_broadcast_data)
             
         except Exception as e:
             logger.error(f"Translation failed in websocket: {e}")

@@ -20,7 +20,7 @@ from app.core.errors import (
     validation_exception_handler,
     general_exception_handler,
 )
-from app.core.logging import setup_logging, RequestIDMiddleware, RequestLoggingMiddleware
+from app.core.logging import setup_logging, RequestIDMiddleware, RequestLoggingMiddleware, WebSocketLoggingMiddleware
 from app.infra.db import close_db_connection
 from app.infra.redis import init_redis_pool, close_redis_pool
 from app.infra.qdrant import init_qdrant_client, close_qdrant_client, ensure_collections_exist
@@ -103,6 +103,7 @@ URITOMO API provides real-time translation with cultural context explanations.
     # Middleware
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(WebSocketLoggingMiddleware)
     
     # Handle CORS
     # Note: allow_origins=["*"] cannot be used with allow_credentials=True
