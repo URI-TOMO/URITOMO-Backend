@@ -523,6 +523,8 @@ class RealtimeSession:
                     self._last_commit_ts = time.monotonic()
                 elif event_type == "input_audio_buffer.cleared":
                     print(f"[REALTIME] buffer.cleared lang={self.lang}")
+                    self._buffered_ms = 0.0
+                    self._last_commit_ts = time.monotonic()
                 elif event_type == "input_audio_buffer.timeout_triggered":
                     print(f"[REALTIME] buffer.timeout lang={self.lang}")
                 elif event_type == "response.created":
@@ -554,6 +556,16 @@ class RealtimeSession:
                     print(f"[REALTIME] session.updated lang={self.lang}")
                 elif event_type == "error":
                     print(f"[REALTIME] error lang={self.lang} data={data}")
+                    err = data.get("error") or {}
+                    if err.get("code") == "input_audio_buffer_commit_empty":
+                        self._buffered_ms = 0.0
+                        self._last_commit_ts = time.monotonic()
+                        self._force_commit_s = 0.0
+                        self._force_commit_ms = 0
+                        print(
+                            f"[REALTIME] force_commit disabled lang={self.lang} "
+                            "reason=commit_empty"
+                        )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1656,7 +1668,7 @@ async def main() -> None:
     vad_threshold = float(os.getenv("OPENAI_REALTIME_VAD_THRESHOLD", "0.5"))
     vad_prefix_ms = int(os.getenv("OPENAI_REALTIME_VAD_PREFIX_MS", "300"))
     vad_silence_ms = int(os.getenv("OPENAI_REALTIME_VAD_SILENCE_MS", "500"))
-    force_commit_ms = int(os.getenv("OPENAI_REALTIME_FORCE_COMMIT_MS", "1200"))
+    force_commit_ms = int(os.getenv("OPENAI_REALTIME_FORCE_COMMIT_MS", "0"))
 
     if not backend:
         raise RuntimeError("Missing backend. Provide --backend or env BACKEND_URL")
