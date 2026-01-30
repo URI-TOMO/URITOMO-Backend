@@ -64,7 +64,6 @@ async def debug_user_info(
 
 
 @router.delete("/clear", status_code=status.HTTP_200_OK)
-@router.delete("/clean", status_code=status.HTTP_200_OK)
 async def clear_all_data(db: AsyncSession = Depends(get_db)):
     """
     Clear ALL data from all tables.
