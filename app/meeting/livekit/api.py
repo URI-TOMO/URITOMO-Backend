@@ -5,7 +5,12 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from livekit import api as lk_api
+try:
+    from livekit import api as lk_api
+    _livekit_import_error: Exception | None = None
+except Exception as exc:  # pragma: no cover - import guard for optional dependency
+    lk_api = None  # type: ignore[assignment]
+    _livekit_import_error = exc
 
 from app.core.config import settings
 from app.core.deps import SessionDep, RedisDep
@@ -30,6 +35,12 @@ class LiveKitTokenResponse(BaseModel):
 
 
 def _require_livekit_env() -> None:
+    if lk_api is None:
+        raise AppError(
+            message=f"LiveKit SDK is not available: {_livekit_import_error}",
+            status_code=500,
+            code="LIVEKIT_SDK_MISSING",
+        )
     if not settings.livekit_url or not settings.livekit_api_key or not settings.livekit_api_secret:
         raise AppError(
             message="LiveKit environment variables are missing",

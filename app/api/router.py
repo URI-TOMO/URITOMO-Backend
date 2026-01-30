@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 
 from app.debug.api import router as debug_router
 from app.api.user.login import router as auth_router
+from app.user.google_login import router as google_login_router
 from app.api.user.main import router as main_router
 from app.api.user.profile import router as profile_router
 
@@ -26,6 +27,7 @@ api_router = APIRouter()
 # 1. Routes that DON'T need authentication (Public/Debug)
 api_router.include_router(debug_router, prefix="/debug")
 api_router.include_router(auth_router)  # Includes real signup/login
+api_router.include_router(google_login_router) # Includes Google Login
 api_router.include_router(worker_token_router)
 
 # 2. Routes that DO need authentication (Protected)

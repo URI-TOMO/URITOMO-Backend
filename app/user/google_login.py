@@ -92,6 +92,24 @@ class GoogleLoginCRUD:
                 await db.refresh(user)
             return user
 
+        # If another account already uses this email, reuse it
+        if google_info.email:
+            email_result = await db.execute(
+                select(User).where(User.email == google_info.email)
+            )
+            email_user = email_result.scalar_one_or_none()
+            if email_user:
+                # Update display info if needed
+                if (
+                    email_user.display_name != google_info.name
+                    or email_user.locale != google_info.locale
+                ):
+                    email_user.display_name = google_info.name
+                    email_user.locale = google_info.locale
+                    await db.commit()
+                    await db.refresh(email_user)
+                return email_user
+
         # Create new user
         new_user = User(
             id=google_info.sub,
@@ -135,6 +153,15 @@ class GoogleAuthService:
             print(f"[DEBUG] token (first 50 chars): {token[:50]}...")
             
             if settings.enable_test_auth:
+                if token == "test-token":
+                    print(f"[DEBUG] Using static test-token")
+                    return GoogleUserInfo(
+                        sub="test-user",
+                        email="test@example.com",
+                        name="Test User",
+                        picture=None,
+                        locale="en",
+                    )
                 print(f"[DEBUG] Test auth enabled, attempting JWT decode")
                 try:
                     payload = jwt.decode(
@@ -217,26 +244,35 @@ async def google_login(
     
     Returns JWT access token and user information.
     """
-    # Verify Google token
-    google_info = GoogleAuthService.verify_google_token(token_request.token)
-    
-    # Get or create user
-    user = await GoogleLoginCRUD.get_or_create_user(db, google_info)
-    
-    # Generate JWT access token
-    access_token = create_access_token(
-        data={"sub": user.id, "email": user.email}
-    )
-    
-    # Get token expiration time
-    expires_in = settings.access_token_expire_minutes * 60  # in seconds
-    
-    return TokenResponse(
-        access_token=access_token,
-        token_type="bearer",
-        expires_in=expires_in,
-        user=UserResponse.model_validate(user)
-    )
+    try:
+        # Verify Google token
+        google_info = GoogleAuthService.verify_google_token(token_request.token)
+
+        # Get or create user
+        user = await GoogleLoginCRUD.get_or_create_user(db, google_info)
+
+        # Generate JWT access token
+        access_token = create_access_token(
+            data={"sub": user.id, "email": user.email}
+        )
+
+        # Get token expiration time
+        expires_in = settings.access_token_expire_minutes * 60  # in seconds
+
+        return TokenResponse(
+            access_token=access_token,
+            token_type="bearer",
+            expires_in=expires_in,
+            user=UserResponse.model_validate(user)
+        )
+    except Exception as exc:
+        import traceback
+        print("[ERROR] /auth/google failed:")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"/auth/google failed: {type(exc).__name__}: {exc}",
+        )
 
 
 @router.get(
