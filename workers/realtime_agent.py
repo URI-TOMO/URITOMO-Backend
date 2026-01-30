@@ -20,9 +20,8 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.infra.db import AsyncSessionLocal
-from app.models.ai import AIEvent
-from app.models.message import ChatMessage
-from app.models.room import RoomMember
+from app.models.room import RoomMember, RoomLiveSession
+from app.models.stt import RoomAiResponse, RoomSttResult
 
 
 REALTIME_SAMPLE_RATE = 24000
@@ -55,6 +54,7 @@ class RoomState:
     active_langs: set[str] = field(default_factory=set)
     ko_pub_sid: Optional[str] = None
     ja_pub_sid: Optional[str] = None
+    session_id: Optional[str] = None
     empty_check_task: Optional[asyncio.Task] = None
 
 
@@ -229,6 +229,7 @@ class RealtimeSession:
         *,
         lang: str,
         room_id: str,
+        session_id: Optional[str],
         api_key: str,
         model: str,
         base_url: str,
@@ -248,6 +249,7 @@ class RealtimeSession:
     ) -> None:
         self.lang = lang
         self.room_id = room_id
+        self._session_id = session_id
         self.api_key = api_key
         self.model = model
         self.base_url = base_url
@@ -273,6 +275,8 @@ class RealtimeSession:
         self._pending_force = False
         self._pending_log_label: Optional[str] = None
         self._save_stt = save_stt
+        self._last_stt_seq: Optional[int] = None
+        self._last_stt_text: Optional[str] = None
 
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._send_task: Optional[asyncio.Task] = None
@@ -466,8 +470,11 @@ class RealtimeSession:
                 elif event_type == "response.done":
                     status = (data.get("response") or {}).get("status")
                     self._response_in_flight = False
-                    if self._assistant_partial.strip():
-                        self._append_history("assistant", self._assistant_partial.strip())
+                    assistant_text = self._assistant_partial.strip()
+                    if assistant_text:
+                        self._append_history("assistant", assistant_text)
+                        print(f"🤖 [AI] response.text lang={self.lang} text={assistant_text!r}")
+                        asyncio.create_task(self._save_ai_response(assistant_text))
                         self._assistant_partial = ""
                     print(f"[REALTIME] response.done lang={self.lang} status={status}")
                     if self._pending_transcript:
@@ -616,6 +623,27 @@ class RealtimeSession:
             return []
         return list(self._history)
 
+    def set_session_id(self, session_id: Optional[str]) -> None:
+        if session_id:
+            self._session_id = session_id
+
+    async def _resolve_live_session_id(self, session) -> Optional[str]:
+        if self._session_id:
+            return self._session_id
+        result = await session.execute(
+            select(RoomLiveSession)
+            .where(
+                RoomLiveSession.room_id == self.room_id,
+                RoomLiveSession.status == "active",
+            )
+            .order_by(RoomLiveSession.started_at.desc())
+        )
+        live_session = result.scalars().first()
+        if not live_session:
+            return None
+        self._session_id = live_session.id
+        return live_session.id
+
     async def _save_transcript(self, transcript: str) -> None:
         if not self._save_stt:
             return
@@ -627,6 +655,10 @@ class RealtimeSession:
         member_id = self._member_cache.get(speaker_id)
         try:
             async with AsyncSessionLocal() as session:
+                session_id = await self._resolve_live_session_id(session)
+                if not session_id:
+                    print(f"[STT] save skipped room_id={self.room_id} reason=no_active_session")
+                    return
                 if member_id is None and speaker_id not in self._member_cache:
                     result = await session.execute(
                         select(RoomMember).where(
@@ -639,74 +671,46 @@ class RealtimeSession:
                     self._member_cache[speaker_id] = member_id
 
                 if not member_id:
+                    print(
+                        f"[STT] save skipped room_id={self.room_id} "
+                        f"reason=no_member speaker_id={speaker_id}"
+                    )
                     return
 
                 for _ in range(3):
                     seq_result = await session.execute(
-                        select(func.max(ChatMessage.seq)).where(ChatMessage.room_id == self.room_id)
+                        select(func.max(RoomSttResult.seq)).where(RoomSttResult.session_id == session_id)
                     )
                     max_seq = seq_result.scalar() or 0
                     next_seq = max_seq + 1
-                    message_id = f"stt_{uuid.uuid4().hex[:16]}"
-                    new_message = ChatMessage(
-                        id=message_id,
+                    stt_id = f"stt_{uuid.uuid4().hex[:16]}"
+                    stt_result = RoomSttResult(
+                        id=stt_id,
                         room_id=self.room_id,
+                        session_id=session_id,
+                        member_id=member_id,
+                        user_lang=self._last_speaker_lang or self.lang,
+                        stt_text=transcript,
+                        translated_text=None,
+                        translated_lang=None,
                         seq=next_seq,
-                        sender_type="human",
-                        sender_member_id=member_id,
-                        message_type="stt",
-                        text=transcript,
-                        lang=self._last_speaker_lang,
-                        meta={
-                            "speaker_identity": speaker_id,
-                            "speaker_name": self._last_speaker_name,
-                            "session_lang": self.lang,
-                        },
-                        created_at=datetime.utcnow(),
-                    )
-                    session.add(new_message)
-                    try:
-                        await session.commit()
-                        print(
-                            "🧾 [STT] saved chat_message "
-                            f"room_id={self.room_id} seq={next_seq} "
-                            f"member_id={member_id} lang={self._last_speaker_lang}"
-                        )
-                        break
-                    except IntegrityError:
-                        await session.rollback()
-                        continue
-
-                for _ in range(3):
-                    seq_result = await session.execute(
-                        select(func.max(AIEvent.seq)).where(AIEvent.room_id == self.room_id)
-                    )
-                    max_seq = seq_result.scalar() or 0
-                    next_seq = max_seq + 1
-                    event_id = f"asr_{uuid.uuid4().hex[:16]}"
-                    ai_event = AIEvent(
-                        id=event_id,
-                        room_id=self.room_id,
-                        seq=next_seq,
-                        event_type="asr",
-                        text=transcript,
-                        lang=self.lang,
                         meta={
                             "speaker_identity": speaker_id,
                             "speaker_name": self._last_speaker_name,
                             "speaker_lang": self._last_speaker_lang,
-                            "member_id": member_id,
                             "session_lang": self.lang,
                         },
                         created_at=datetime.utcnow(),
                     )
-                    session.add(ai_event)
+                    session.add(stt_result)
                     try:
                         await session.commit()
+                        self._last_stt_seq = next_seq
+                        self._last_stt_text = transcript
                         print(
-                            "🧾 [STT] saved ai_event "
-                            f"room_id={self.room_id} seq={next_seq} "
-                            f"member_id={member_id} lang={self.lang}"
+                            "🧾 [STT] saved room_stt_results "
+                            f"room_id={self.room_id} session_id={session_id} "
+                            f"seq={next_seq} member_id={member_id} lang={self.lang}"
                         )
                         return
                     except IntegrityError:
@@ -714,6 +718,60 @@ class RealtimeSession:
                         continue
         except Exception as exc:
             print(f"[STT] save failed room_id={self.room_id} err={exc!r}")
+
+    async def _save_ai_response(self, text: str) -> None:
+        if not text:
+            return
+        try:
+            async with AsyncSessionLocal() as session:
+                session_id = await self._resolve_live_session_id(session)
+                if not session_id:
+                    print(f"[AI] save skipped room_id={self.room_id} reason=no_active_session")
+                    return
+
+                stt_seq_end = self._last_stt_seq
+                stt_text = self._last_stt_text
+                if stt_seq_end is None or not stt_text:
+                    last_result = await session.execute(
+                        select(RoomSttResult)
+                        .where(RoomSttResult.session_id == session_id)
+                        .order_by(RoomSttResult.seq.desc())
+                        .limit(1)
+                    )
+                    last_stt = last_result.scalars().first()
+                    if last_stt:
+                        stt_seq_end = last_stt.seq
+                        stt_text = last_stt.stt_text
+                if stt_seq_end is None or not stt_text:
+                    print(f"[AI] save skipped room_id={self.room_id} reason=no_stt_anchor")
+                    return
+
+                response_id = f"air_{uuid.uuid4().hex[:16]}"
+                ai_response = RoomAiResponse(
+                    id=response_id,
+                    room_id=self.room_id,
+                    session_id=session_id,
+                    lang=self.lang,
+                    stt_text=stt_text,
+                    stt_seq_end=stt_seq_end,
+                    answer_text=text,
+                    meta={
+                        "session_lang": self.lang,
+                        "reply_to_speaker_identity": self._last_speaker_identity,
+                        "reply_to_speaker_name": self._last_speaker_name,
+                        "reply_to_speaker_lang": self._last_speaker_lang,
+                    },
+                    created_at=datetime.utcnow(),
+                )
+                session.add(ai_response)
+                await session.commit()
+                print(
+                    "🧾 [AI] saved room_ai_responses "
+                    f"room_id={self.room_id} session_id={session_id} "
+                    f"stt_seq_end={stt_seq_end} lang={self.lang}"
+                )
+        except Exception as exc:
+            print(f"[AI] save failed room_id={self.room_id} err={exc!r}")
 
     async def _push_audio(self, pcm16_24k: bytes) -> None:
         if not pcm16_24k:
@@ -972,6 +1030,7 @@ async def publish_output_track_with_retry(
 
 async def connect_room(
     room_id: str,
+    session_id: Optional[str],
     auth: AuthState,
     auto_subscribe: bool,
     rooms: dict[str, RoomState],
@@ -999,6 +1058,13 @@ async def connect_room(
     trigger_debug: bool,
 ) -> None:
     if room_id in rooms:
+        state = rooms.get(room_id)
+        if state and session_id:
+            state.session_id = session_id
+            if state.realtime_ko:
+                state.realtime_ko.set_session_id(session_id)
+            if state.realtime_ja:
+                state.realtime_ja.set_session_id(session_id)
         return
 
     token_resp = await fetch_livekit_token_with_retry(
@@ -1011,6 +1077,7 @@ async def connect_room(
 
     room = rtc.Room()
     state = RoomState(room=room)
+    state.session_id = session_id
     rooms[room_id] = state
 
     @room.on("participant_connected")
@@ -1120,6 +1187,7 @@ async def connect_room(
     state.realtime_ko = RealtimeSession(
         lang="ko",
         room_id=room_id,
+        session_id=session_id,
         api_key=realtime_key,
         model=realtime_model,
         base_url=realtime_url,
@@ -1140,6 +1208,7 @@ async def connect_room(
     state.realtime_ja = RealtimeSession(
         lang="ja",
         room_id=room_id,
+        session_id=session_id,
         api_key=realtime_key,
         model=realtime_model,
         base_url=realtime_url,
@@ -1240,6 +1309,7 @@ async def listen_room_events(
                 continue
             action = data.get("action")
             room_id = data.get("room_id")
+            session_id = data.get("session_id")
             if not room_id:
                 continue
             if action == "join":
@@ -1247,6 +1317,7 @@ async def listen_room_events(
                 try:
                     await connect_room(
                         room_id=room_id,
+                        session_id=session_id,
                         auth=auth,
                         auto_subscribe=auto_subscribe,
                         rooms=rooms,
@@ -1320,11 +1391,15 @@ async def main() -> None:
     if not output_modalities:
         output_modalities = ["audio"]
     if "audio" in output_modalities and "text" in output_modalities:
-        print(
-            "[REALTIME] output_modalities includes both audio+text; "
-            "fallback to audio only to avoid API error"
-        )
-        output_modalities = ["audio"]
+        allow_both_value = os.getenv("OPENAI_REALTIME_ALLOW_BOTH_MODALITIES", "false")
+        allow_both = allow_both_value.lower() in {"1", "true", "yes", "y", "on"}
+        if not allow_both:
+            print(
+                "[REALTIME] output_modalities includes both audio+text; "
+                "fallback to audio only to avoid API error "
+                "(set OPENAI_REALTIME_ALLOW_BOTH_MODALITIES=true to allow both)"
+            )
+            output_modalities = ["audio"]
     fallback_trigger_raw = os.getenv(
         "OPENAI_TRIGGER_PHRASES",
         "우리토모는 어떻게 생각해?,ウリトモはどう思ってる？",
@@ -1390,6 +1465,7 @@ async def main() -> None:
     if room_id:
         await connect_room(
             room_id=room_id,
+            session_id=None,
             auth=auth,
             auto_subscribe=auto_subscribe,
             rooms=rooms,
