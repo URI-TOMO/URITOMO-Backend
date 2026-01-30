@@ -244,6 +244,7 @@ class RealtimeSession:
         output_modalities: list[str],
         always_respond: bool,
         history_max_turns: int,
+        summary_max_chars: int,
         save_stt: bool,
         trigger_debug: bool,
     ) -> None:
@@ -268,6 +269,7 @@ class RealtimeSession:
         self._wake_cooldown_s = wake_cooldown_s
         self._last_wake_ts = 0.0
         self._history_max_turns = history_max_turns
+        self._summary_max_chars = summary_max_chars
         self._history: list[dict[str, str]] = []
         self._assistant_partial = ""
         self._response_in_flight = False
@@ -503,7 +505,8 @@ class RealtimeSession:
         if not force and now - self._last_wake_ts < self._wake_cooldown_s:
             return
         self._last_wake_ts = now
-        messages = self._build_history_messages()
+        summary = self._build_history_summary()
+        system_text = self._build_system_prompt(summary)
         await self._send_json(
             {
                 "type": "response.create",
@@ -512,25 +515,21 @@ class RealtimeSession:
                     "input": [
                         {
                             "type": "message",
+                            "role": "system",
+                            "content": [{"type": "input_text", "text": system_text}],
+                        },
+                        {
+                            "type": "message",
                             "role": "user",
                             "content": [{"type": "input_text", "text": transcript}],
                         }
-                    ]
-                    if not messages
-                    else [
-                        {
-                            "type": "message",
-                            "role": item["role"],
-                            "content": [{"type": "input_text", "text": item["text"]}],
-                        }
-                        for item in messages
                     ],
                 },
             }
         )
         print(
             f"[REALTIME] {log_label} lang={self.lang} "
-            f"history={len(messages)} transcript={transcript!r}"
+            f"summary_chars={len(summary)} transcript={transcript!r}"
         )
 
     def _set_pending_response(self, transcript: str, log_label: str) -> None:
@@ -622,6 +621,61 @@ class RealtimeSession:
         if not self._history:
             return []
         return list(self._history)
+
+    def _build_history_summary(self) -> str:
+        if not self._history:
+            return ""
+        history = self._history
+        if history and history[-1].get("role") == "user":
+            history = history[:-1]
+        if not history:
+            return ""
+
+        limit = self._summary_max_chars
+        if limit <= 0:
+            limit = 800
+
+        parts: list[str] = []
+        total = 0
+        for item in reversed(history):
+            role = item.get("role")
+            text = (item.get("text") or "").replace("\n", " ").strip()
+            if not text:
+                continue
+            if len(text) > 160:
+                text = text[:160].rstrip() + "..."
+            if role == "user":
+                prefix = "사용자" if self.lang == "ko" else "ユーザー"
+            elif role == "assistant":
+                prefix = "어시스턴트" if self.lang == "ko" else "アシスタント"
+            else:
+                prefix = "시스템" if self.lang == "ko" else "システム"
+            segment = f"{prefix}: {text}"
+            sep = " / " if parts else ""
+            if total + len(sep) + len(segment) > limit:
+                break
+            parts.append(segment)
+            total += len(sep) + len(segment)
+
+        parts.reverse()
+        return " / ".join(parts)
+
+    def _build_system_prompt(self, summary: str) -> str:
+        if self.lang == "ko":
+            base = (
+                "너는 음성 비서다. 아래 대화 요약을 참고해 사용자의 최신 발화를 간단히 정리하고 "
+                "실용적인 조언을 제공하라. 반드시 한국어로만 답하라."
+            )
+            if not summary:
+                return base + " 대화 요약: (없음)"
+            return base + f" 대화 요약: {summary}"
+        base = (
+            "あなたは音声アシスタントです。以下の会話要約を参考に、ユーザーの最新発話を簡潔に整理し、"
+            "実用的な助言を提供してください。日本語のみで回答してください。"
+        )
+        if not summary:
+            return base + " 会話要約: (なし)"
+        return base + f" 会話要約: {summary}"
 
     def set_session_id(self, session_id: Optional[str]) -> None:
         if session_id:
@@ -1087,6 +1141,7 @@ async def connect_room(
     vad_silence_ms: int,
     always_respond: bool,
     history_max_turns: int,
+    summary_max_chars: int,
     save_stt: bool,
     trigger_debug: bool,
 ) -> None:
@@ -1235,6 +1290,7 @@ async def connect_room(
         vad_silence_ms=vad_silence_ms,
         always_respond=always_respond,
         history_max_turns=history_max_turns,
+        summary_max_chars=summary_max_chars,
         save_stt=save_stt,
         trigger_debug=trigger_debug,
     )
@@ -1256,6 +1312,7 @@ async def connect_room(
         vad_silence_ms=vad_silence_ms,
         always_respond=always_respond,
         history_max_turns=history_max_turns,
+        summary_max_chars=summary_max_chars,
         save_stt=save_stt,
         trigger_debug=trigger_debug,
     )
@@ -1324,6 +1381,7 @@ async def listen_room_events(
     vad_silence_ms: int,
     always_respond: bool,
     history_max_turns: int,
+    summary_max_chars: int,
     save_stt: bool,
     trigger_debug: bool,
 ) -> None:
@@ -1374,6 +1432,7 @@ async def listen_room_events(
                         vad_silence_ms=vad_silence_ms,
                         always_respond=always_respond,
                         history_max_turns=history_max_turns,
+                        summary_max_chars=summary_max_chars,
                         save_stt=save_stt,
                         trigger_debug=trigger_debug,
                     )
@@ -1464,6 +1523,7 @@ async def main() -> None:
     if not realtime_key:
         raise RuntimeError("Missing OPENAI_API_KEY")
     history_max_turns = int(os.getenv("OPENAI_HISTORY_MAX_TURNS", "0"))
+    summary_max_chars = int(os.getenv("OPENAI_HISTORY_SUMMARY_MAX_CHARS", "800"))
     save_stt_value = os.getenv("OPENAI_STT_SAVE", "true")
     save_stt = save_stt_value.lower() in {"1", "true", "yes", "y", "on"}
     trigger_debug_value = os.getenv("OPENAI_TRIGGER_DEBUG", "false")
@@ -1522,6 +1582,7 @@ async def main() -> None:
             vad_silence_ms=vad_silence_ms,
             always_respond=always_respond,
             history_max_turns=history_max_turns,
+            summary_max_chars=summary_max_chars,
             save_stt=save_stt,
             trigger_debug=trigger_debug,
         )
@@ -1552,6 +1613,7 @@ async def main() -> None:
         vad_silence_ms=vad_silence_ms,
         always_respond=always_respond,
         history_max_turns=history_max_turns,
+        summary_max_chars=summary_max_chars,
         save_stt=save_stt,
         trigger_debug=trigger_debug,
     )
