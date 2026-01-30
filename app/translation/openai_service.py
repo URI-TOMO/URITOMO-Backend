@@ -61,7 +61,7 @@ class OpenAIService:
         if not text:
             return ""
 
-        if not self.client or settings.use_mock_translation:
+        if not self.client:
             logger.warning("OpenAI API key is not configured. Returning mock translation.")
             return self._mock_translate(text, target_lang)
 
