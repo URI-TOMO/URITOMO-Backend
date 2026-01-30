@@ -9,10 +9,25 @@ from app.models.room import RoomMember
 from app.models.ai import AIEvent
 from app.meeting.ws.manager import manager
 from app.translation.deepl_service import deepl_service
-from app.translation.openai_service import openai_service
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+def _ai_event_payload(ai_event: AIEvent) -> dict:
+    return {
+        "id": ai_event.id,
+        "room_id": ai_event.room_id,
+        "seq": ai_event.seq,
+        "event_type": ai_event.event_type,
+        "original_text": ai_event.original_text,
+        "original_lang": ai_event.original_lang,
+        "translated_text": ai_event.translated_text,
+        "translated_lang": ai_event.translated_lang,
+        "text": ai_event.text,
+        "lang": ai_event.lang,
+        "meta": ai_event.meta,
+        "created_at": ai_event.created_at.isoformat() if ai_event.created_at else None,
+    }
 
 def _normalize_lang(lang: Optional[str]) -> str:
     if not lang:
@@ -78,12 +93,12 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
         await db_session.commit()
         await db_session.refresh(new_message)
 
-        # 5. Perform Translation (GPT)
+        # 5. Perform Translation (DeepL)
         target_lang = "Japanese" if source_lang == "Korean" else "Korean"
         translated_text: Optional[str] = None
 
         try:
-            translated_text = await openai_service.translate_text(
+            translated_text = deepl_service.translate_text(
                 text=text,
                 source_lang=source_lang,
                 target_lang=target_lang
@@ -283,17 +298,7 @@ async def handle_stt_message(session_id: str, user_id: str, data: dict):
             # 8. Broadcast Translation
             trans_broadcast_data = {
                 "type": "translation",
-                "data": {
-                    "room_id": room_id,
-                    "participant_id": user_id,
-                    "participant_name": member.display_name,
-                    "Original": text,
-                    "translated": translated_text,
-                    "timestamp": ai_event.created_at.isoformat(),
-                    "sequence": str(next_seq),
-                    "lang": target_lang,
-                    "is_stt": True
-                }
+                "data": _ai_event_payload(ai_event),
             }
             await manager.broadcast(session_id, trans_broadcast_data)
         except Exception as e:

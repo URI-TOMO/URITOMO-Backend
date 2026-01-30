@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from app.infra.db import AsyncSessionLocal
 from app.models.room import RoomMember, RoomLiveSession
 from app.models.stt import RoomAiResponse, RoomSttResult
+from app.translation.deepl_service import deepl_service
 
 
 REALTIME_SAMPLE_RATE = 24000
@@ -70,6 +71,24 @@ def normalize_lang(value: Optional[str]) -> Optional[str]:
         return "ko"
     if value.startswith("ja"):
         return "ja"
+    return None
+
+
+def lang_code_to_name(value: Optional[str]) -> Optional[str]:
+    code = normalize_lang(value)
+    if code == "ko":
+        return "Korean"
+    if code == "ja":
+        return "Japanese"
+    return None
+
+
+def opposite_lang_code(value: Optional[str]) -> Optional[str]:
+    code = normalize_lang(value)
+    if code == "ko":
+        return "ja"
+    if code == "ja":
+        return "ko"
     return None
 
 
@@ -764,6 +783,24 @@ class RealtimeSession:
                         )
                         return
 
+                source_lang_code = normalize_lang(self._last_speaker_lang) or normalize_lang(self.lang)
+                target_lang_code = opposite_lang_code(source_lang_code)
+                translated_text = None
+                translated_lang = None
+                if source_lang_code and target_lang_code:
+                    source_lang_name = lang_code_to_name(source_lang_code)
+                    target_lang_name = lang_code_to_name(target_lang_code)
+                    if source_lang_name and target_lang_name:
+                        try:
+                            translated_text = deepl_service.translate_text(
+                                text=transcript,
+                                source_lang=source_lang_name,
+                                target_lang=target_lang_name,
+                            )
+                            translated_lang = target_lang_code
+                        except Exception as exc:
+                            print(f"[STT] translate failed room_id={self.room_id} err={exc!r}")
+
                 for _ in range(3):
                     seq_result = await session.execute(
                         select(func.max(RoomSttResult.seq)).where(RoomSttResult.session_id == session_id)
@@ -778,8 +815,8 @@ class RealtimeSession:
                         member_id=member_id,
                         user_lang=self._last_speaker_lang or self.lang,
                         stt_text=transcript,
-                        translated_text=None,
-                        translated_lang=None,
+                        translated_text=translated_text,
+                        translated_lang=translated_lang,
                         seq=next_seq,
                         meta={
                             "speaker_identity": speaker_id,
