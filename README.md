@@ -159,9 +159,9 @@ See Swagger for full details.
 ## WebSocket
 
 Meeting session socket:
-- `WS /meeting/{session_id}?token=<JWT>`
+- `WS /meeting/{room_id}?token=<JWT>`
 
-Server messages include `session_connected`, `pong`, and `unknown_type`.
+Server messages include `room_connected`, `pong`, and `unknown_type`.
 Client messages include `chat` (requires auth) and `ping`.
 
 ## Background Workers

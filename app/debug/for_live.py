@@ -11,7 +11,7 @@ from app.infra.db import get_db
 from app.core.token import verify_token
 # from app.core.token import CurrentUserDep # Removed for body-token usage
 from app.models import (
-    User, Room, RoomMember, ChatMessage, Live, AIEvent,
+    User, Room, RoomMember, ChatMessage, AIEvent,
     UserFriend, DmThread, DmParticipant, DmMessage,
     RoomLiveSession, RoomLiveSessionMember
 )
@@ -238,34 +238,20 @@ async def generate_dense_live_data(
             # 60 Utterances per session
             for u in range(60):
                 speaker = random.choice(room_members)
-                u_id = str(uuid4())
                 u_start = s_start + timedelta(seconds=u*30)
                 
                 live_text = f"Utterance #{u+1}: Speaking about important details of {title}..."
                 live_seq += 1
-                
-                live_item = Live(
-                    id=u_id,
-                    room_id=room_id,
-                    member_id=speaker.id,
-                    seq=live_seq,
-                    text=live_text,
-                    lang=id_to_locale.get(speaker.user_id, "en"),
-                    start_ms=u*30000,
-                    end_ms=u*30000 + 4000,
-                    created_at=u_start
-                )
-                db.add(live_item)
-                
-                target_lang = "ko" if live_item.lang != "ko" else "ja"
+
+                speaker_lang = id_to_locale.get(speaker.user_id, "en")
+                target_lang = "ko" if speaker_lang != "ko" else "ja"
                 db.add(AIEvent(
                     id=str(uuid4()),
                     room_id=room_id,
                     seq=live_seq,
                     event_type="translation",
-                    source_live_id=u_id,
                     original_text=live_text,
-                    original_lang=live_item.lang,
+                    original_lang=speaker_lang,
                     translated_text=f"[AI Translated to {target_lang}] {live_text}",
                     translated_lang=target_lang,
                     created_at=u_start + timedelta(milliseconds=600)

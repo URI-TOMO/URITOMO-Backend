@@ -9,9 +9,72 @@ from app.models.room import RoomMember
 from app.models.ai import AIEvent
 from app.meeting.ws.manager import manager
 from app.translation.deepl_service import deepl_service
+from app.translation.openai_service import openai_service
 from app.core.logging import get_logger
+from app.core.time import to_jst_iso
 
 logger = get_logger(__name__)
+
+def _ai_event_payload(ai_event: AIEvent) -> dict:
+    return {
+        "id": ai_event.id,
+        "room_id": ai_event.room_id,
+        "seq": ai_event.seq,
+        "event_type": ai_event.event_type,
+        "original_text": ai_event.original_text,
+        "original_lang": ai_event.original_lang,
+        "translated_text": ai_event.translated_text,
+        "translated_lang": ai_event.translated_lang,
+        "text": ai_event.text,
+        "lang": ai_event.lang,
+        "meta": ai_event.meta,
+        "created_at": to_jst_iso(ai_event.created_at),
+    }
+
+def _normalize_lang(lang: Optional[str]) -> str:
+    if not lang:
+        return "Korean"
+    lang_lower = lang.strip().lower()
+    if lang_lower in {"ko", "kr", "korean"}:
+        return "Korean"
+    if lang_lower in {"ja", "jp", "japanese"}:
+        return "Japanese"
+    return lang
+
+def _looks_like_mock(text: Optional[str]) -> bool:
+    if not text:
+        return True
+    return (
+        text.startswith("[KO]")
+        or text.startswith("[JA]")
+        or text.startswith("[TRANS]")
+        or text.startswith("[Korean]")
+        or text.startswith("[Japanese]")
+    )
+
+async def _translate_with_fallback(text: str, source_lang: str, target_lang: str) -> Optional[str]:
+    translated_text: Optional[str] = None
+    if deepl_service.enabled:
+        try:
+            translated_text = deepl_service.translate_text(
+                text=text,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
+        except Exception:
+            translated_text = None
+    if _looks_like_mock(translated_text):
+        try:
+            translated_text = await openai_service.translate_text(
+                text=text,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
+        except Exception:
+            pass
+    if _looks_like_mock(translated_text):
+        return None
+    return translated_text
 
 async def handle_chat_message(room_id: str, user_id: str, data: dict):
     """
@@ -48,7 +111,7 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
         next_seq = max_seq + 1
 
         # 4. Create ChatMessage (Original)
-        source_lang = data.get("lang", "Korean") # Default to Korean based on user context
+        source_lang = _normalize_lang(data.get("lang")) # Default to Korean based on user context
         
         message_id = f"msg_{uuid.uuid4().hex[:16]}"
         new_message = ChatMessage(
@@ -60,6 +123,8 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
             message_type="text",
             text=text,
             lang=source_lang,
+            translated_text=None,
+            translated_lang=None,
             created_at=datetime.utcnow()
         )
 
@@ -67,35 +132,15 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
         await db_session.commit()
         await db_session.refresh(new_message)
 
-        # 5. Broadcast Original Message
-        broadcast_data = {
-            "type": "chat",
-            "data": {
-                "id": new_message.id,
-                "room_id": new_message.room_id,
-                "seq": new_message.seq,
-                "sender_member_id": new_message.sender_member_id,
-                "display_name": member.display_name,
-                "text": new_message.text,
-                "lang": new_message.lang,
-                "created_at": new_message.created_at.isoformat()
-            }
-        }
-        await manager.broadcast(room_id, broadcast_data)
+        # 5. Perform Translation (DeepL)
+        target_lang = "Japanese" if source_lang == "Korean" else "Korean"
+        translated_text: Optional[str] = None
 
-        # 6. Perform Translation (Sync/Async)
-        # DeepL translate is synchronous in our service currently, but it's fine for now 
-        # as we are in an async handler, though blocking the loop is not ideal if high load.
-        # Ideally deepl_service should be async or run in executor.
-        # For this implementation, we run it directly.
-        
-        target_lang = "Japanese" if "Korean" in source_lang else "Korean"
-        
         try:
-            translated_text = deepl_service.translate_text(
-                text=text, 
-                source_lang=source_lang, 
-                target_lang=target_lang
+            translated_text = await _translate_with_fallback(
+                text=text,
+                source_lang=source_lang,
+                target_lang=target_lang,
             )
             
             # 7. Save Translation Event
@@ -137,42 +182,32 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
                 },
                 created_at=datetime.utcnow()
             )
-            
+
+            new_message.translated_text = translated_text
+            new_message.translated_lang = target_lang
             db_session.add(ai_event)
             await db_session.commit()
             
-            # 8. Broadcast Translation
-            # The structure requested by user initially:
-            # {
-            #     "room_id": "room_01",
-            #     "participant_id": "user_xyz123",
-            #     "participant_name": "user",
-            #     "Original": "안녕하세요",
-            #     "translated": "こんにちは",
-            #     "timestamp": "2024-01-01T00:00:00.00Z",
-            #     "sequence": "0"
-            # }
-            # We map this to our websocket message format.
-            
-            trans_broadcast_data = {
-                "type": "translation",
-                "data": {
-                    "room_id": room_id,
-                    "participant_id": user_id,
-                    "participant_name": member.display_name,
-                    "Original": text,
-                    "translated": translated_text,
-                    "timestamp": ai_event.created_at.isoformat(),
-                    "sequence": str(next_seq),
-                    "lang": target_lang
-                }
-            }
-            
-            await manager.broadcast(room_id, trans_broadcast_data)
-            
         except Exception as e:
             logger.error(f"Translation failed in websocket: {e}")
-            # We don't fail the chat, just skip translation broadcast
+
+        # 6. Broadcast Combined Message (Original + Translation if available)
+        broadcast_data = {
+            "type": "chat",
+            "data": {
+                "id": new_message.id,
+                "room_id": new_message.room_id,
+                "seq": new_message.seq,
+                "sender_member_id": new_message.sender_member_id,
+                "display_name": member.display_name,
+                "text": new_message.text,
+                "lang": new_message.lang,
+                "translated_text": new_message.translated_text,
+                "translated_lang": new_message.translated_lang,
+                "created_at": to_jst_iso(new_message.created_at),
+            }
+        }
+        await manager.broadcast(room_id, broadcast_data)
 
 async def handle_stt_message(session_id: str, user_id: str, data: dict):
     """
@@ -245,6 +280,8 @@ async def handle_stt_message(session_id: str, user_id: str, data: dict):
             message_type="text",
             text=text,
             lang=source_lang,
+            translated_text=None,
+            translated_lang=None,
             created_at=datetime.utcnow()
         )
 
@@ -264,7 +301,7 @@ async def handle_stt_message(session_id: str, user_id: str, data: dict):
                 "text": new_message.text,
                 "lang": new_message.lang,
                 "is_final": True,
-                "created_at": new_message.created_at.isoformat()
+                "created_at": to_jst_iso(new_message.created_at),
             }
         }
         await manager.broadcast(session_id, broadcast_data)
@@ -298,23 +335,15 @@ async def handle_stt_message(session_id: str, user_id: str, data: dict):
                 created_at=datetime.utcnow()
             )
             
+            new_message.translated_text = translated_text
+            new_message.translated_lang = target_lang
             db_session.add(ai_event)
             await db_session.commit()
             
             # 8. Broadcast Translation
             trans_broadcast_data = {
                 "type": "translation",
-                "data": {
-                    "room_id": room_id,
-                    "participant_id": user_id,
-                    "participant_name": member.display_name,
-                    "Original": text,
-                    "translated": translated_text,
-                    "timestamp": ai_event.created_at.isoformat(),
-                    "sequence": str(next_seq),
-                    "lang": target_lang,
-                    "is_stt": True
-                }
+                "data": _ai_event_payload(ai_event),
             }
             await manager.broadcast(session_id, trans_broadcast_data)
         except Exception as e:

@@ -4,6 +4,7 @@ from typing import Optional
 
 import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from starlette.websockets import WebSocketState
 from sqlalchemy import select
 
 from app.core.token import verify_token
@@ -74,12 +75,15 @@ async def meeting_websocket(
             # Receive message from client
             try:
                 data = await websocket.receive_json()
+            except WebSocketDisconnect:
+                raise
             except Exception:
-                await websocket.send_json({
-                    "type": "error",
-                    "code": "INVALID_JSON",
-                    "message": "無効なJSON形式です。送信内容を確認してください。"
-                })
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    await websocket.send_json({
+                        "type": "error",
+                        "code": "INVALID_JSON",
+                        "message": "無効なJSON形式です。送信内容を確認してください。"
+                    })
                 continue
             
             msg_type = data.get("type")
@@ -120,11 +124,12 @@ async def meeting_websocket(
         print(f"WebSocket error in {room_id}: {e}")
         manager.disconnect(room_id, websocket, user_id)
         try:
-            await websocket.send_json({
-                "type": "error",
-                "code": "INTERNAL_ERROR",
-                "message": "サーバー内部エラーが発生しました。しばらくしてから再接続してください。"
-            })
-            await websocket.close(code=1011)
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json({
+                    "type": "error",
+                    "code": "INTERNAL_ERROR",
+                    "message": "サーバー内部エラーが発生しました。しばらくしてから再接続してください。"
+                })
+                await websocket.close(code=1011)
         except:
             pass
