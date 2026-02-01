@@ -10,6 +10,7 @@ from pydantic import BaseModel, EmailStr
 from app.infra.db import get_db
 from app.models.user import User
 from app.models.friend import UserFriend
+from app.models.room import RoomInvitation, Room
 from app.core.token import get_current_user_id
 
 router = APIRouter(tags=["friend"])
@@ -32,9 +33,12 @@ class FriendRequestSender(BaseModel):
 
 class FriendRequest(BaseModel):
     request_id: str
+    type: str # 'friend_request' | 'room_invite'
     sender: FriendRequestSender
     status: str
     created_at: datetime
+    room_id: Optional[str] = None
+    room_name: Optional[str] = None
 
 class FriendData(BaseModel):
     id: str
@@ -138,7 +142,8 @@ async def get_received_friend_requests(
     db: AsyncSession = Depends(get_db),
     user_id: str = Depends(get_current_user_id)
 ):
-    stmt = (
+    # 1. Fetch Friend Requests
+    stmt_friend = (
         select(UserFriend, User)
         .join(User, UserFriend.requester_id == User.id)
         .where(
@@ -146,25 +151,126 @@ async def get_received_friend_requests(
             UserFriend.status == "pending"
         )
     )
-    
-    result = await db.execute(stmt)
-    rows = result.all()
-    
-    response = []
-    for f_row, sender_user in rows:
-        response.append(FriendRequest(
+    result_friend = await db.execute(stmt_friend)
+    friend_rows = result_friend.all() 
+
+    requests = []
+    for f_row, sender_user in friend_rows:
+        requests.append(FriendRequest(
             request_id=f_row.id,
+            type="friend_request",
             sender=FriendRequestSender(
                 id=sender_user.id,
                 name=sender_user.display_name,
                 email=sender_user.email,
-                avatar=None # User model currently has no avatar/profile_image field
+                avatar=None 
             ),
             status=f_row.status,
             created_at=f_row.requested_at
         ))
         
-    return response
+    # 2. Fetch Room Invitations
+    stmt_room = (
+        select(RoomInvitation, Room, User)
+        .join(Room, RoomInvitation.room_id == Room.id)
+        .join(User, RoomInvitation.inviter_id == User.id)
+        .where(
+            RoomInvitation.invitee_id == user_id,
+            RoomInvitation.status == "pending"
+        )
+    )
+    result_room = await db.execute(stmt_room)
+    room_rows = result_room.all()
+
+    for r_inv, r_room, r_sender in room_rows:
+        requests.append(FriendRequest(
+            request_id=r_inv.id,
+            type="room_invite",
+            sender=FriendRequestSender(
+                id=r_sender.id,
+                name=r_sender.display_name,
+                email=r_sender.email,
+                avatar=None
+            ),
+            status=r_inv.status,
+            created_at=r_inv.created_at,
+            room_id=r_room.id,
+            room_name=r_room.title or "Untitled Room"
+        ))
+    
+    # Sort by created_at desc (newest first)
+    requests.sort(key=lambda x: x.created_at, reverse=True)
+    
+    return requests
+
+@router.get("/user/friend/requests", response_model=List[FriendRequest])
+async def get_unified_requests(
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    Get pending friend requests and room invitations.
+    """
+    # 1. Fetch Friend Requests
+    stmt_friend = (
+        select(UserFriend, User)
+        .join(User, UserFriend.requester_id == User.id)
+        .where(
+            UserFriend.addressee_id == user_id,
+            UserFriend.status == "pending"
+        )
+    )
+    result_friend = await db.execute(stmt_friend)
+    friend_rows = result_friend.all() # [(UserFriend, User), ...]
+
+    requests = []
+    for f_row, sender_user in friend_rows:
+        requests.append(FriendRequest(
+            request_id=f_row.id,
+            type="friend_request",
+            sender=FriendRequestSender(
+                id=sender_user.id,
+                name=sender_user.display_name,
+                email=sender_user.email,
+                avatar=None
+            ),
+            status=f_row.status,
+            created_at=f_row.requested_at
+        ))
+
+    # 2. Fetch Room Invitations
+    stmt_room = (
+        select(RoomInvitation, Room, User)
+        .join(Room, RoomInvitation.room_id == Room.id)
+        .join(User, RoomInvitation.inviter_id == User.id)
+        .where(
+            RoomInvitation.invitee_id == user_id,
+            RoomInvitation.status == "pending"
+        )
+    )
+    result_room = await db.execute(stmt_room)
+    room_rows = result_room.all() # [(RoomInvitation, Room, User), ...]
+
+    for r_inv, r_room, r_sender in room_rows:
+        requests.append(FriendRequest(
+            request_id=r_inv.id,
+            type="room_invite",
+            sender=FriendRequestSender(
+                id=r_sender.id,
+                name=r_sender.display_name,
+                email=r_sender.email,
+                avatar=None
+            ),
+            status=r_inv.status,
+            created_at=r_inv.created_at,
+            room_id=r_room.id,
+            room_name=r_room.title or "Untitled Room"
+        ))
+    
+    # Sort by created_at desc (newest first)
+    requests.sort(key=lambda x: x.created_at, reverse=True)
+    
+    return requests
 
 @router.post("/user/friend/request/{request_id}/accept", response_model=AcceptFriendRequestResponse)
 async def accept_friend_request(

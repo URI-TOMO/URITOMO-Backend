@@ -21,7 +21,7 @@ if config.config_file_name is not None:
 from app.models.base import Base
 # Import all models here so they are registered on Base.metadata
 from app.models.user import User
-from app.models.room import Room, RoomMember
+from app.models.room import Room, RoomMember, RoomInvitation
 from app.models.message import ChatMessage
 from app.models.token import AuthToken
 from app.models.live import Live

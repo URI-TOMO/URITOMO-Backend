@@ -12,6 +12,7 @@ __all__ = [
     "Base",
     "User",
     "Room",
+    "RoomInvitation",
     "RoomMember",
     "RoomLiveSession",
     "RoomLiveSessionMember",
