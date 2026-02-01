@@ -25,6 +25,8 @@ class ChatMessage(Base):
     
     text: Mapped[str] = mapped_column(Text, nullable=False)
     lang: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    translated_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    translated_lang: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
     start_ms: Mapped[Optional[int]] = mapped_column(nullable=True)
     end_ms: Mapped[Optional[int]] = mapped_column(nullable=True)
     meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

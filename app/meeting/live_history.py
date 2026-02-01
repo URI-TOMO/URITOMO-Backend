@@ -86,6 +86,8 @@ async def get_session_messages(
                 "display_name": sender_name,
                 "text": msg.text,
                 "lang": msg.lang,
+                "translated_text": msg.translated_text,
+                "translated_lang": msg.translated_lang,
                 "created_at": msg.created_at
             })
 

@@ -49,7 +49,12 @@ class ConnectionManager:
     async def broadcast(self, room_id: str, message: dict):
         if room_id in self.active_rooms:
             count = len(self.active_rooms[room_id])
-            logger.debug(f"WS Broadcast | Room: {room_id} | Targets: {count} | MsgType: {message.get('type')}")
+            try:
+                import json
+                payload = json.dumps(message, ensure_ascii=False, default=str)
+            except Exception:
+                payload = str(message)
+            logger.info(f"🩵🩵🩵🩵🩵🩵 WS Broadcast | Room: {room_id} | Targets: {count} | Payload: {payload}")
             for connection in self.active_rooms[room_id]:
                 try:
                     await connection.send_json(message)

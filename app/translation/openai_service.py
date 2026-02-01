@@ -1,4 +1,5 @@
 from typing import List, Dict
+import json
 import openai
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -51,5 +52,49 @@ class OpenAIService:
         except Exception as e:
             logger.error(f"OpenAI API call failed: {e}")
             return []
+
+    async def translate_text(self, text: str, source_lang: str, target_lang: str) -> str:
+        """
+        Translate text using OpenAI.
+        Returns translated text only.
+        """
+        if not text:
+            return ""
+
+        if not self.client:
+            logger.warning("OpenAI API key is not configured. Returning mock translation.")
+            return self._mock_translate(text, target_lang)
+
+        prompt = (
+            "Translate the following text from {source_lang} to {target_lang}. "
+            "Return a JSON object with a single key \"translation\" and no other text.\n\n"
+            "Text:\n"
+            "\"\"\"{text}\"\"\""
+        ).format(source_lang=source_lang, target_lang=target_lang, text=text)
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are a precise translation engine."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0
+            )
+
+            result = json.loads(response.choices[0].message.content)
+            if isinstance(result, dict) and "translation" in result:
+                return str(result["translation"])
+            if isinstance(result, str):
+                return result
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"OpenAI translation failed: {e}")
+            return self._mock_translate(text, target_lang)
+
+    def _mock_translate(self, text: str, target_lang: str) -> str:
+        prefix = f"[{target_lang}]" if target_lang else "[TRANS]"
+        return f"{prefix} {text}"
 
 openai_service = OpenAIService()
