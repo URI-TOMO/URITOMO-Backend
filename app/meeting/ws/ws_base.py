@@ -34,10 +34,13 @@ async def meeting_websocket(
         user_id = verify_token(token)
     if token and user_id:
         logger.info(f"💬 CHAT WS Attempt | Room: {room_id} | User: {user_id}")
+        print(f"💬 CHAT WS Attempt | Room: {room_id} | User: {user_id}", flush=True)
     elif token and not user_id:
         logger.info(f"⚠️ WS Auth Failed | Room: {room_id} | Token: provided")
+        print(f"⚠️ WS Auth Failed | Room: {room_id} | Token: provided", flush=True)
     else:
         logger.info(f"🔌 WS Attempt | Room: {room_id} | User: None")
+        print(f"🔌 WS Attempt | Room: {room_id} | User: None", flush=True)
     
     # 2. Check if room exists
     async with AsyncSessionLocal() as db_session:
@@ -60,6 +63,8 @@ async def meeting_websocket(
 
     # 3. Handle connection via manager
     await manager.connect(room_id, websocket, user_id)
+    logger.info(f"✅ WS Connected | Room: {room_id} | User: {user_id}")
+    print(f"✅ WS Connected | Room: {room_id} | User: {user_id}", flush=True)
     
     try:
         # Send initial success message
@@ -70,6 +75,7 @@ async def meeting_websocket(
                 "user_id": user_id
             }
         })
+        logger.info(f"📤 WS Sent room_connected | Room: {room_id} | User: {user_id}")
 
         while True:
             # Receive message from client
@@ -87,9 +93,13 @@ async def meeting_websocket(
                 continue
             
             msg_type = data.get("type")
+            logger.info(f"📥 WS Received | Room: {room_id} | User: {user_id} | Type: {msg_type} | Data: {data}")
+            print(f"📥 WS Received | Room: {room_id} | User: {user_id} | Type: {msg_type}", flush=True)
             
             if msg_type == "chat":
                 if not user_id:
+                    logger.warning(f"⚠️ WS Chat Auth Required | Room: {room_id}")
+                    print(f"⚠️ WS Chat Auth Required | Room: {room_id}", flush=True)
                     await websocket.send_json({
                         "type": "error",
                         "code": "AUTH_REQUIRED",
@@ -97,6 +107,7 @@ async def meeting_websocket(
                     })
                     continue
                 
+                logger.info(f"💬 WS Chat Processing | Room: {room_id} | User: {user_id} | Text: {data.get('text', '')[:50]}")
                 await handle_chat_message(room_id, user_id, data)
             
             elif msg_type == "stt":
@@ -119,9 +130,10 @@ async def meeting_websocket(
                 })
 
     except WebSocketDisconnect:
+        logger.info(f"🔌 WS Disconnected | Room: {room_id} | User: {user_id}")
         manager.disconnect(room_id, websocket, user_id)
     except Exception as e:
-        print(f"WebSocket error in {room_id}: {e}")
+        logger.error(f"❌ WS Error | Room: {room_id} | User: {user_id} | Error: {e}")
         manager.disconnect(room_id, websocket, user_id)
         try:
             if websocket.client_state == WebSocketState.CONNECTED:

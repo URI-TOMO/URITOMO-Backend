@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Optional
+import logging
 
 from sqlalchemy import select, func
 from app.infra.db import AsyncSessionLocal
@@ -10,10 +11,9 @@ from app.models.ai import AIEvent
 from app.meeting.ws.manager import manager
 from app.translation.deepl_service import deepl_service
 from app.translation.openai_service import openai_service
-from app.core.logging import get_logger
 from app.core.time import to_jst_iso
 
-logger = get_logger(__name__)
+logger = logging.getLogger("uritomo.ws")
 
 def _ai_event_payload(ai_event: AIEvent) -> dict:
     return {
@@ -101,7 +101,12 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
         )
         member = member_result.scalar_one_or_none()
         if not member:
+            logger.warning(f"⚠️ Chat Member Not Found | Room: {room_id} | User: {user_id}")
+            print(f"⚠️ Chat Member Not Found | Room: {room_id} | User: {user_id}", flush=True)
             return
+        
+        logger.info(f"📝 Chat Message Start | Room: {room_id} | User: {user_id} | Member: {member.display_name}")
+        print(f"📝 Chat Message Start | Room: {room_id} | User: {user_id} | Member: {member.display_name}", flush=True)
 
         # 3. Get next sequence number for this room
         seq_result = await db_session.execute(
@@ -131,8 +136,12 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
         db_session.add(new_message)
         await db_session.commit()
         await db_session.refresh(new_message)
+        
+        logger.info(f"💾 Chat Message Saved | ID: {message_id} | Room: {room_id} | Seq: {next_seq} | Text: {text[:50]}")
+
 
         # 5. Perform Translation (DeepL)
+
         target_lang = "Japanese" if source_lang == "Korean" else "Korean"
         translated_text: Optional[str] = None
 
@@ -191,7 +200,9 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
         except Exception as e:
             logger.error(f"Translation failed in websocket: {e}")
 
-        # 6. Broadcast Combined Message (Original + Translation if available)
+        
+
+        # 6. Broadcast Message (without translation for Room chat)
         broadcast_data = {
             "type": "chat",
             "data": {
@@ -202,12 +213,14 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
                 "display_name": member.display_name,
                 "text": new_message.text,
                 "lang": new_message.lang,
-                "translated_text": new_message.translated_text,
-                "translated_lang": new_message.translated_lang,
+                "translated_text": None,
+                "translated_lang": None,
                 "created_at": to_jst_iso(new_message.created_at),
             }
         }
+        logger.info(f"📡 Chat Broadcast Start | Room: {room_id} | Message ID: {new_message.id}")
         await manager.broadcast(room_id, broadcast_data)
+        logger.info(f"✅ Chat Broadcast Complete | Room: {room_id} | Message ID: {new_message.id}")
 
 async def handle_stt_message(session_id: str, user_id: str, data: dict):
     """
