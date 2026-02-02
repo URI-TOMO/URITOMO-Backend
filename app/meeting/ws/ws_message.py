@@ -139,7 +139,70 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
         
         logger.info(f"💾 Chat Message Saved | ID: {message_id} | Room: {room_id} | Seq: {next_seq} | Text: {text[:50]}")
 
-        # 5. Broadcast Message (without translation for Room chat)
+
+        # 5. Perform Translation (DeepL)
+
+        target_lang = "Japanese" if source_lang == "Korean" else "Korean"
+        translated_text: Optional[str] = None
+
+        try:
+            translated_text = await _translate_with_fallback(
+                text=text,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
+            
+            # 7. Save Translation Event
+            # Using specific ID format or UUID
+            trans_id = f"trans_{uuid.uuid4().hex[:16]}"
+            
+            ai_event = AIEvent(
+                id=trans_id,
+                room_id=room_id,
+                seq=next_seq, # Use same seq as message or new seq? 
+                              # AIEvent has unique constraint on (room_id, seq). 
+                              # ChatMessage also has (room_id, seq).
+                              # If they share the same seq namespace, we have a problem.
+                              # AIEvent and ChatMessage are different tables.
+                              # If the frontend renders by sorting ALL events by seq, then we should probably increment seq.
+                              # However, getting a new lock for seq is complex.
+                              # Usually AI events are associated with the message or have their own sequence.
+                              # Let's check the models.
+                              # Message: seq is BigInteger.
+                              # AIEvent: seq is BigInteger.
+                              # If they are interleaved, they need a shared sequence generator or we reuse the message seq if it's 1:1.
+                              # But AIEvent might not be 1:1.
+                              # For now, let's assume we reuse the sequence of the message to link them 
+                              # OR we just increment if we can.
+                              # But since we already committed the message, fetching max_seq again might get the same or next.
+                              # Let's use the SAME sequence to indicate they belong together 
+                              # (if the uniqueness is per TABLE, then it's fine).
+                              # Uniqueness: ChatMessage(room_id, seq) AND AIEvent(room_id, seq).
+                              # So we CAN use the same seq for AIEvent as ChatMessage without DB conflict.
+                event_type="translation",
+                original_text=text,
+                original_lang=source_lang,
+                translated_text=translated_text,
+                translated_lang=target_lang,
+                meta={
+                     "related_message_id": message_id,
+                     "participant_id": user_id,
+                     "participant_name": member.display_name
+                },
+                created_at=datetime.utcnow()
+            )
+
+            new_message.translated_text = translated_text
+            new_message.translated_lang = target_lang
+            db_session.add(ai_event)
+            await db_session.commit()
+            
+        except Exception as e:
+            logger.error(f"Translation failed in websocket: {e}")
+
+        
+
+        # 6. Broadcast Message (without translation for Room chat)
         broadcast_data = {
             "type": "chat",
             "data": {
