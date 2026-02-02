@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Optional
+import logging
 
 from sqlalchemy import select, func
 from app.infra.db import AsyncSessionLocal
@@ -10,10 +11,9 @@ from app.models.ai import AIEvent
 from app.meeting.ws.manager import manager
 from app.translation.deepl_service import deepl_service
 from app.translation.openai_service import openai_service
-from app.core.logging import get_logger
 from app.core.time import to_jst_iso
 
-logger = get_logger(__name__)
+logger = logging.getLogger("uritomo.ws")
 
 def _ai_event_payload(ai_event: AIEvent) -> dict:
     return {
@@ -101,7 +101,12 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
         )
         member = member_result.scalar_one_or_none()
         if not member:
+            logger.warning(f"⚠️ Chat Member Not Found | Room: {room_id} | User: {user_id}")
+            print(f"⚠️ Chat Member Not Found | Room: {room_id} | User: {user_id}", flush=True)
             return
+        
+        logger.info(f"📝 Chat Message Start | Room: {room_id} | User: {user_id} | Member: {member.display_name}")
+        print(f"📝 Chat Message Start | Room: {room_id} | User: {user_id} | Member: {member.display_name}", flush=True)
 
         # 3. Get next sequence number for this room
         seq_result = await db_session.execute(
@@ -131,67 +136,10 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
         db_session.add(new_message)
         await db_session.commit()
         await db_session.refresh(new_message)
+        
+        logger.info(f"💾 Chat Message Saved | ID: {message_id} | Room: {room_id} | Seq: {next_seq} | Text: {text[:50]}")
 
-        # 5. Perform Translation (DeepL)
-        target_lang = "Japanese" if source_lang == "Korean" else "Korean"
-        translated_text: Optional[str] = None
-
-        try:
-            translated_text = await _translate_with_fallback(
-                text=text,
-                source_lang=source_lang,
-                target_lang=target_lang,
-            )
-            
-            # 7. Save Translation Event
-            # Using specific ID format or UUID
-            trans_id = f"trans_{uuid.uuid4().hex[:16]}"
-            
-            ai_event = AIEvent(
-                id=trans_id,
-                room_id=room_id,
-                seq=next_seq, # Use same seq as message or new seq? 
-                              # AIEvent has unique constraint on (room_id, seq). 
-                              # ChatMessage also has (room_id, seq).
-                              # If they share the same seq namespace, we have a problem.
-                              # AIEvent and ChatMessage are different tables.
-                              # If the frontend renders by sorting ALL events by seq, then we should probably increment seq.
-                              # However, getting a new lock for seq is complex.
-                              # Usually AI events are associated with the message or have their own sequence.
-                              # Let's check the models.
-                              # Message: seq is BigInteger.
-                              # AIEvent: seq is BigInteger.
-                              # If they are interleaved, they need a shared sequence generator or we reuse the message seq if it's 1:1.
-                              # But AIEvent might not be 1:1.
-                              # For now, let's assume we reuse the sequence of the message to link them 
-                              # OR we just increment if we can.
-                              # But since we already committed the message, fetching max_seq again might get the same or next.
-                              # Let's use the SAME sequence to indicate they belong together 
-                              # (if the uniqueness is per TABLE, then it's fine).
-                              # Uniqueness: ChatMessage(room_id, seq) AND AIEvent(room_id, seq).
-                              # So we CAN use the same seq for AIEvent as ChatMessage without DB conflict.
-                event_type="translation",
-                original_text=text,
-                original_lang=source_lang,
-                translated_text=translated_text,
-                translated_lang=target_lang,
-                meta={
-                     "related_message_id": message_id,
-                     "participant_id": user_id,
-                     "participant_name": member.display_name
-                },
-                created_at=datetime.utcnow()
-            )
-
-            new_message.translated_text = translated_text
-            new_message.translated_lang = target_lang
-            db_session.add(ai_event)
-            await db_session.commit()
-            
-        except Exception as e:
-            logger.error(f"Translation failed in websocket: {e}")
-
-        # 6. Broadcast Combined Message (Original + Translation if available)
+        # 5. Broadcast Message (without translation for Room chat)
         broadcast_data = {
             "type": "chat",
             "data": {
@@ -202,12 +150,14 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
                 "display_name": member.display_name,
                 "text": new_message.text,
                 "lang": new_message.lang,
-                "translated_text": new_message.translated_text,
-                "translated_lang": new_message.translated_lang,
+                "translated_text": None,
+                "translated_lang": None,
                 "created_at": to_jst_iso(new_message.created_at),
             }
         }
+        logger.info(f"📡 Chat Broadcast Start | Room: {room_id} | Message ID: {new_message.id}")
         await manager.broadcast(room_id, broadcast_data)
+        logger.info(f"✅ Chat Broadcast Complete | Room: {room_id} | Message ID: {new_message.id}")
 
 async def _resolve_active_session_id(db_session, room_id: str) -> Optional[str]:
     result = await db_session.execute(
