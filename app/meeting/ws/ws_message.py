@@ -5,7 +5,7 @@ from typing import Optional
 from sqlalchemy import select, func
 from app.infra.db import AsyncSessionLocal
 from app.models.message import ChatMessage
-from app.models.room import RoomMember
+from app.models.room import RoomMember, RoomLiveSession
 from app.models.ai import AIEvent
 from app.meeting.ws.manager import manager
 from app.translation.deepl_service import deepl_service
@@ -209,7 +209,23 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
         }
         await manager.broadcast(room_id, broadcast_data)
 
-async def handle_stt_message(session_id: str, user_id: str, data: dict):
+async def _resolve_active_session_id(db_session, room_id: str) -> Optional[str]:
+    result = await db_session.execute(
+        select(RoomLiveSession)
+        .where(
+            RoomLiveSession.room_id == room_id,
+            RoomLiveSession.status == "active",
+        )
+        .order_by(RoomLiveSession.started_at.desc())
+        .limit(1)
+    )
+    live_session = result.scalars().first()
+    if not live_session:
+        return None
+    return live_session.id
+
+
+async def handle_stt_message(room_id: str, session_id: Optional[str], user_id: str, data: dict):
     """
     Handle incoming STT (Speech-to-Text) message:
     1. If not is_final, just broadcast to others (partial UI)
@@ -234,11 +250,16 @@ async def handle_stt_message(session_id: str, user_id: str, data: dict):
                 "lang": data.get("lang", "Korean")
             }
         }
-        await manager.broadcast(session_id, broadcast_data)
+        await manager.broadcast(room_id, broadcast_data)
         return
 
     # If it's final, process like a chat message (save & translate)
     async with AsyncSessionLocal() as db_session:
+        if not session_id:
+            session_id = await _resolve_active_session_id(db_session, room_id)
+            if not session_id:
+                logger.warning("stt.session.missing", room_id=room_id, user_id=user_id)
+                return
         # 1. Get Session and Room ID
         session_result = await db_session.execute(
             select(RoomLiveSession).where(RoomLiveSession.id == session_id)
@@ -304,7 +325,7 @@ async def handle_stt_message(session_id: str, user_id: str, data: dict):
                 "created_at": to_jst_iso(new_message.created_at),
             }
         }
-        await manager.broadcast(session_id, broadcast_data)
+        await manager.broadcast(room_id, broadcast_data)
 
         # 6. Translate
         target_lang = "Japanese" if "Korean" in source_lang else "Korean"
@@ -345,6 +366,6 @@ async def handle_stt_message(session_id: str, user_id: str, data: dict):
                 "type": "translation",
                 "data": _ai_event_payload(ai_event),
             }
-            await manager.broadcast(session_id, trans_broadcast_data)
+            await manager.broadcast(room_id, trans_broadcast_data)
         except Exception as e:
             logger.error(f"Translation failed for STT: {e}")

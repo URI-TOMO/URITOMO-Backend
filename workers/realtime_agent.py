@@ -25,13 +25,53 @@ from app.models.room import RoomMember, RoomLiveSession
 from app.models.stt import RoomAiResponse, RoomSttResult
 from app.translation.deepl_service import deepl_service
 from app.translation.openai_service import openai_service
+from core.logging_system import emit_log, get_event_logger
 
 
 REALTIME_SAMPLE_RATE = 24000
 LIVEKIT_SAMPLE_RATE = 48000
-ALIEN_STAMP = "👽" * 20
 MOCK_TRANSLATION_PREFIXES = ("[KO]", "[JA]", "[TRANS]", "[Korean]", "[Japanese]")
 REALTIME_MIN_COMMIT_MS = 100
+
+STT_LOGGER = get_event_logger("uritomo.stt.worker")
+
+
+def _stt_log(
+    level: str,
+    *,
+    event: str,
+    summary: str,
+    domain: str = "stt",
+    payload: Optional[str] = None,
+    **kv,
+) -> None:
+    emit_log(
+        STT_LOGGER,
+        level=level,
+        domain=domain,
+        event=event,
+        summary=summary,
+        kv=kv,
+        payload=payload,
+    )
+
+
+def _ai_log(
+    level: str,
+    *,
+    event: str,
+    summary: str,
+    payload: Optional[str] = None,
+    **kv,
+) -> None:
+    _stt_log(
+        level,
+        event=event,
+        summary=summary,
+        domain="ai",
+        payload=payload,
+        **kv,
+    )
 
 
 @dataclass
@@ -575,6 +615,18 @@ class RealtimeSession:
     async def _send_response(self, transcript: str, *, log_label: str, force: bool) -> None:
         now = time.monotonic()
         if not force and now - self._last_wake_ts < self._wake_cooldown_s:
+            if self._trigger_debug:
+                _ai_log(
+                    "INFO",
+                    event="ai.trigger.cooldown",
+                    summary="AI response suppressed by cooldown",
+                    room_id=self.room_id,
+                    session_id=self._session_id,
+                    lang=self.lang,
+                    cooldown_s=self._wake_cooldown_s,
+                    since_last=round(now - self._last_wake_ts, 2),
+                    payload=transcript,
+                )
             return
         self._last_wake_ts = now
         summary = self._build_history_summary()
@@ -599,19 +651,34 @@ class RealtimeSession:
                 },
             }
         )
-        print(
-            f"[REALTIME] {log_label} lang={self.lang} "
-            f"summary_chars={len(summary)} transcript={transcript!r}"
+        _ai_log(
+            "INFO",
+            event="ai.response.request",
+            summary="AI response requested",
+            room_id=self.room_id,
+            session_id=self._session_id,
+            lang=self.lang,
+            label=log_label,
+            summary_chars=len(summary),
+            force=force,
+            payload=transcript,
         )
 
     def _set_pending_response(self, transcript: str, log_label: str) -> None:
         self._pending_transcript = transcript
         self._pending_force = True
         self._pending_log_label = log_label
-        print(
-            f"[REALTIME] defer response lang={self.lang} "
-            f"reason=in_flight transcript={transcript!r}"
-        )
+        if self._trigger_debug:
+            _ai_log(
+                "INFO",
+                event="ai.trigger.defer",
+                summary="AI response deferred (in flight)",
+                room_id=self.room_id,
+                session_id=self._session_id,
+                lang=self.lang,
+                label=log_label,
+                payload=transcript,
+            )
 
     async def _flush_pending_response(self) -> None:
         transcript = self._pending_transcript
@@ -628,18 +695,31 @@ class RealtimeSession:
         if not transcript:
             return
         if self._trigger_prompt and transcript.strip() == self._trigger_prompt:
-            print(
-                f"[REALTIME] ignore transcript matches trigger prompt lang={self.lang} "
-                f"transcript={transcript!r}"
-            )
+            if self._trigger_debug:
+                _ai_log(
+                    "INFO",
+                    event="ai.trigger.ignore",
+                    summary="Transcript matches trigger prompt; ignored",
+                    room_id=self.room_id,
+                    session_id=self._session_id,
+                    lang=self.lang,
+                    payload=transcript,
+                )
             return
         self._append_history("user", transcript)
         triggered = self._always_respond or self._contains_trigger_phrase(transcript)
         if self._trigger_debug and not triggered and not self._always_respond:
-            print(
-                f"[REALTIME] trigger miss lang={self.lang} "
-                f"transcript={transcript!r} normalized={self._normalize_text(transcript)!r} "
-                f"triggers={self._trigger_phrases}"
+            _ai_log(
+                "INFO",
+                event="ai.trigger.miss",
+                summary="Trigger not matched; response not sent",
+                room_id=self.room_id,
+                session_id=self._session_id,
+                lang=self.lang,
+                normalized=self._normalize_text(transcript),
+                trigger_count=len(self._trigger_phrases),
+                triggers="|".join(self._trigger_phrases[:10]),
+                payload=transcript,
             )
         if self._response_in_flight:
             if triggered:
@@ -783,7 +863,12 @@ class RealtimeSession:
             async with AsyncSessionLocal() as session:
                 session_id = await self._resolve_live_session_id(session)
                 if not session_id:
-                    print(f"[STT] save skipped room_id={self.room_id} reason=no_active_session")
+                    _stt_log(
+                        "WARN",
+                        event="stt.save.skip",
+                        summary="STT save skipped (no active session)",
+                        room_id=self.room_id,
+                    )
                     return
                 if member_id is None and speaker_id not in self._member_cache:
                     result = await session.execute(
@@ -814,9 +899,13 @@ class RealtimeSession:
                         await session.commit()
                         member_id = new_member.id
                         self._member_cache[speaker_id] = member_id
-                        print(
-                            "🧾 [STT] created room_member "
-                            f"room_id={self.room_id} member_id={member_id} speaker_id={speaker_id}"
+                        _stt_log(
+                            "INFO",
+                            event="stt.member.created",
+                            summary="Room member created for STT",
+                            room_id=self.room_id,
+                            member_id=member_id,
+                            user_id=speaker_id,
                         )
                     except IntegrityError:
                         await session.rollback()
@@ -830,9 +919,12 @@ class RealtimeSession:
                         member_id = member.id if member else None
                         self._member_cache[speaker_id] = member_id
                     if not member_id:
-                        print(
-                            f"[STT] save skipped room_id={self.room_id} "
-                            f"reason=no_member speaker_id={speaker_id}"
+                        _stt_log(
+                            "WARN",
+                            event="stt.save.skip",
+                            summary="STT save skipped (no member)",
+                            room_id=self.room_id,
+                            user_id=speaker_id,
                         )
                         return
 
@@ -860,7 +952,13 @@ class RealtimeSession:
                             if translated_text:
                                 translated_lang = target_lang_code
                         except Exception as exc:
-                            print(f"[STT] translate failed room_id={self.room_id} err={exc!r}")
+                            _stt_log(
+                                "WARN",
+                                event="stt.translate.fail",
+                                summary="STT translation failed",
+                                room_id=self.room_id,
+                                error=str(exc),
+                            )
 
                 for _ in range(3):
                     seq_result = await session.execute(
@@ -892,11 +990,17 @@ class RealtimeSession:
                         await session.commit()
                         self._last_stt_seq = next_seq
                         self._last_stt_text = transcript
-                        print(
-                            f"{ALIEN_STAMP} 🧾 [STT] saved room_stt_results "
-                            f"room_id={self.room_id} session_id={session_id} "
-                            f"seq={next_seq} member_id={member_id} lang={self.lang} "
-                            f"text={transcript!r} translated={translated_text!r}"
+                        _stt_log(
+                            "INFO",
+                            event="stt.saved",
+                            summary="STT saved",
+                            room_id=self.room_id,
+                            session_id=session_id,
+                            seq=next_seq,
+                            member_id=member_id,
+                            lang=self.lang,
+                            translated_lang=translated_lang,
+                            payload=transcript,
                         )
                         await self._publish_stt_event(
                             room_id=self.room_id,
@@ -923,7 +1027,13 @@ class RealtimeSession:
                         await session.rollback()
                         continue
         except Exception as exc:
-            print(f"[STT] save failed room_id={self.room_id} err={exc!r}")
+            _stt_log(
+                "ERROR",
+                event="stt.save.fail",
+                summary="STT save failed",
+                room_id=self.room_id,
+                error=str(exc),
+            )
 
     async def _publish_stt_event(self, room_id: str, message: dict) -> None:
         payload = {
@@ -934,8 +1044,27 @@ class RealtimeSession:
         try:
             redis = aioredis.from_url(self._redis_url, encoding="utf-8", decode_responses=True)
             await redis.publish(self._stt_channel, json.dumps(payload, ensure_ascii=False))
+            data = message.get("data") or {}
+            _stt_log(
+                "INFO",
+                domain="redis",
+                event="stt.redis.pub",
+                summary="STT event published",
+                room_id=room_id,
+                session_id=data.get("session_id"),
+                seq=data.get("seq"),
+                channel=self._stt_channel,
+            )
         except Exception as exc:
-            print(f"[STT] publish failed room_id={room_id} err={exc!r}")
+            _stt_log(
+                "ERROR",
+                domain="redis",
+                event="stt.redis.pub_fail",
+                summary="STT publish failed",
+                room_id=room_id,
+                error=str(exc),
+                channel=self._stt_channel,
+            )
         finally:
             if redis:
                 try:

@@ -117,6 +117,7 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-secret-key-change-in-production}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      WORKER_SERVICE_KEY: ${WORKER_SERVICE_KEY:-}
       
       # External APIs (optional - will use mock if not provided)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

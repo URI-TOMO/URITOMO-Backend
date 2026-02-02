@@ -111,6 +111,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import logging
+import sys
 from typing import Any, Mapping, Optional
 
 LEVEL_EMOJI = {
@@ -206,3 +208,45 @@ def format_log_line(evt: LogEvent) -> str:
     kv_pairs = _format_kv_pairs(evt.kv)
     return f"{time_str} {sev_emoji} {level:<5} {domain_emoji} {evt.event:<18} {kv_pairs} | {summary}"
 
+
+def get_event_logger(name: str, level: str = "INFO") -> logging.Logger:
+    logger = logging.getLogger(name)
+    if not getattr(logger, "_uritomo_event_handler", False):
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(handler)
+        logger.propagate = False
+        logger._uritomo_event_handler = True
+    logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+    return logger
+
+
+def emit_log(
+    logger: Optional[logging.Logger],
+    *,
+    level: str,
+    domain: str,
+    event: str,
+    summary: str,
+    kv: Optional[Mapping[str, Any]] = None,
+    payload: Optional[str] = None,
+    success: bool = False,
+    use_iso_time: bool = False,
+) -> str:
+    evt = LogEvent(
+        level=level,
+        domain=domain,
+        event=event,
+        summary=summary,
+        kv=kv or {},
+        payload=payload,
+        success=success,
+        use_iso_time=use_iso_time,
+    )
+    line = format_log_line(evt)
+    if logger is None:
+        print(line)
+    else:
+        log_level = getattr(logging, level.upper(), logging.INFO)
+        logger.log(log_level, line)
+    return line
