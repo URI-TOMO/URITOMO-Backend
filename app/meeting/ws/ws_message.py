@@ -12,6 +12,7 @@ from app.meeting.ws.manager import manager
 from app.translation.deepl_service import deepl_service
 from app.translation.openai_service import openai_service
 from app.core.time import to_jst_iso
+from app.core.config import settings
 
 logger = logging.getLogger("uritomo.ws")
 
@@ -35,11 +36,85 @@ def _normalize_lang(lang: Optional[str]) -> str:
     if not lang:
         return "Korean"
     lang_lower = lang.strip().lower()
-    if lang_lower in {"ko", "kr", "korean"}:
+    if (
+        lang_lower in {"ko", "kr", "kor", "korean"}
+        or lang_lower.startswith("ko-")
+        or lang_lower.startswith("ko_")
+    ):
         return "Korean"
-    if lang_lower in {"ja", "jp", "japanese"}:
+    if (
+        lang_lower in {"ja", "jp", "jpn", "japanese"}
+        or lang_lower.startswith("ja-")
+        or lang_lower.startswith("ja_")
+    ):
         return "Japanese"
     return lang
+
+
+def _is_auto_lang(lang: Optional[str]) -> bool:
+    if not lang:
+        return False
+    return lang.strip().lower() in {"auto", "unknown", "und"}
+
+
+def _detect_lang_from_text(text: str) -> Optional[str]:
+    if not text:
+        return None
+    for ch in text:
+        code = ord(ch)
+        if 0xAC00 <= code <= 0xD7A3 or 0x1100 <= code <= 0x11FF or 0x3130 <= code <= 0x318F:
+            return "Korean"
+        if 0x3040 <= code <= 0x309F or 0x30A0 <= code <= 0x30FF or 0xFF65 <= code <= 0xFF9F:
+            return "Japanese"
+        if 0x4E00 <= code <= 0x9FFF:
+            return "Japanese"
+    return None
+
+
+def _contains_korean(text: str) -> bool:
+    for ch in text:
+        code = ord(ch)
+        if 0xAC00 <= code <= 0xD7A3 or 0x1100 <= code <= 0x11FF or 0x3130 <= code <= 0x318F:
+            return True
+    return False
+
+
+def _contains_japanese_kana(text: str) -> bool:
+    for ch in text:
+        code = ord(ch)
+        if 0x3040 <= code <= 0x309F or 0x30A0 <= code <= 0x30FF or 0xFF65 <= code <= 0xFF9F:
+            return True
+    return False
+
+
+def _should_retry_translation(
+    original_text: str,
+    translated_text: Optional[str],
+    source_lang: str,
+    target_lang: str,
+) -> bool:
+    if not translated_text:
+        return True
+    if source_lang == target_lang:
+        return False
+    if translated_text.strip() != original_text.strip():
+        return False
+    if source_lang == "Japanese" and _contains_japanese_kana(original_text):
+        return True
+    if source_lang == "Korean" and _contains_korean(original_text):
+        return True
+    if target_lang == "Korean" and _contains_japanese_kana(translated_text):
+        return True
+    if target_lang == "Japanese" and _contains_korean(translated_text):
+        return True
+    return False
+
+
+def _resolve_source_lang(text: str, lang: Optional[str]) -> str:
+    if _is_auto_lang(lang):
+        detected = _detect_lang_from_text(text)
+        return detected or "Korean"
+    return _normalize_lang(lang)
 
 def _looks_like_mock(text: Optional[str]) -> bool:
     if not text:
@@ -52,9 +127,17 @@ def _looks_like_mock(text: Optional[str]) -> bool:
         or text.startswith("[Japanese]")
     )
 
-async def _translate_with_fallback(text: str, source_lang: str, target_lang: str) -> Optional[str]:
+async def _translate_with_fallback(
+    text: str,
+    source_lang: str,
+    target_lang: str,
+    *,
+    allow_mock: bool = False,
+) -> Optional[str]:
     translated_text: Optional[str] = None
-    if deepl_service.enabled:
+    allow_mock = allow_mock or settings.use_mock_translation
+    deepl_failed = False
+    if deepl_service.enabled or settings.translation_provider == "MOCK":
         try:
             translated_text = deepl_service.translate_text(
                 text=text,
@@ -63,7 +146,14 @@ async def _translate_with_fallback(text: str, source_lang: str, target_lang: str
             )
         except Exception:
             translated_text = None
+        if not translated_text or not translated_text.strip():
+            deepl_failed = True
+    if _should_retry_translation(text, translated_text, source_lang, target_lang):
+        translated_text = None
+        deepl_failed = True
     if _looks_like_mock(translated_text):
+        if (allow_mock or deepl_failed) and translated_text:
+            return translated_text
         try:
             translated_text = await openai_service.translate_text(
                 text=text,
@@ -73,6 +163,8 @@ async def _translate_with_fallback(text: str, source_lang: str, target_lang: str
         except Exception:
             pass
     if _looks_like_mock(translated_text):
+        if (allow_mock or deepl_failed) and translated_text:
+            return translated_text
         return None
     return translated_text
 
@@ -116,7 +208,7 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
         next_seq = max_seq + 1
 
         # 4. Create ChatMessage (Original)
-        source_lang = _normalize_lang(data.get("lang")) # Default to Korean based on user context
+        source_lang = _resolve_source_lang(text, data.get("lang")) # Default to Korean based on user context
         
         message_id = f"msg_{uuid.uuid4().hex[:16]}"
         new_message = ChatMessage(
@@ -150,53 +242,54 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
                 text=text,
                 source_lang=source_lang,
                 target_lang=target_lang,
+                allow_mock=settings.use_mock_translation,
             )
-            
-            # 7. Save Translation Event
-            # Using specific ID format or UUID
-            trans_id = f"trans_{uuid.uuid4().hex[:16]}"
-            
-            ai_event = AIEvent(
-                id=trans_id,
-                room_id=room_id,
-                seq=next_seq, # Use same seq as message or new seq? 
-                              # AIEvent has unique constraint on (room_id, seq). 
-                              # ChatMessage also has (room_id, seq).
-                              # If they share the same seq namespace, we have a problem.
-                              # AIEvent and ChatMessage are different tables.
-                              # If the frontend renders by sorting ALL events by seq, then we should probably increment seq.
-                              # However, getting a new lock for seq is complex.
-                              # Usually AI events are associated with the message or have their own sequence.
-                              # Let's check the models.
-                              # Message: seq is BigInteger.
-                              # AIEvent: seq is BigInteger.
-                              # If they are interleaved, they need a shared sequence generator or we reuse the message seq if it's 1:1.
-                              # But AIEvent might not be 1:1.
-                              # For now, let's assume we reuse the sequence of the message to link them 
-                              # OR we just increment if we can.
-                              # But since we already committed the message, fetching max_seq again might get the same or next.
-                              # Let's use the SAME sequence to indicate they belong together 
-                              # (if the uniqueness is per TABLE, then it's fine).
-                              # Uniqueness: ChatMessage(room_id, seq) AND AIEvent(room_id, seq).
-                              # So we CAN use the same seq for AIEvent as ChatMessage without DB conflict.
-                event_type="translation",
-                original_text=text,
-                original_lang=source_lang,
-                translated_text=translated_text,
-                translated_lang=target_lang,
-                meta={
-                     "related_message_id": message_id,
-                     "participant_id": user_id,
-                     "participant_name": member.display_name
-                },
-                created_at=datetime.utcnow()
-            )
+            if translated_text:
+                # 7. Save Translation Event
+                # Using specific ID format or UUID
+                trans_id = f"trans_{uuid.uuid4().hex[:16]}"
 
-            new_message.translated_text = translated_text
-            new_message.translated_lang = target_lang
-            db_session.add(ai_event)
-            await db_session.commit()
-            
+                ai_event = AIEvent(
+                    id=trans_id,
+                    room_id=room_id,
+                    seq=next_seq, # Use same seq as message or new seq? 
+                                  # AIEvent has unique constraint on (room_id, seq). 
+                                  # ChatMessage also has (room_id, seq).
+                                  # If they share the same seq namespace, we have a problem.
+                                  # AIEvent and ChatMessage are different tables.
+                                  # If the frontend renders by sorting ALL events by seq, then we should probably increment seq.
+                                  # However, getting a new lock for seq is complex.
+                                  # Usually AI events are associated with the message or have their own sequence.
+                                  # Let's check the models.
+                                  # Message: seq is BigInteger.
+                                  # AIEvent: seq is BigInteger.
+                                  # If they are interleaved, they need a shared sequence generator or we reuse the message seq if it's 1:1.
+                                  # But AIEvent might not be 1:1.
+                                  # For now, let's assume we reuse the sequence of the message to link them 
+                                  # OR we just increment if we can.
+                                  # But since we already committed the message, fetching max_seq again might get the same or next.
+                                  # Let's use the SAME sequence to indicate they belong together 
+                                  # (if the uniqueness is per TABLE, then it's fine).
+                                  # Uniqueness: ChatMessage(room_id, seq) AND AIEvent(room_id, seq).
+                                  # So we CAN use the same seq for AIEvent as ChatMessage without DB conflict.
+                    event_type="translation",
+                    original_text=text,
+                    original_lang=source_lang,
+                    translated_text=translated_text,
+                    translated_lang=target_lang,
+                    meta={
+                         "related_message_id": message_id,
+                         "participant_id": user_id,
+                         "participant_name": member.display_name
+                    },
+                    created_at=datetime.utcnow()
+                )
+
+                new_message.translated_text = translated_text
+                new_message.translated_lang = target_lang
+                db_session.add(ai_event)
+                await db_session.commit()
+
         except Exception as e:
             logger.error(f"Translation failed in websocket: {e}")
 
