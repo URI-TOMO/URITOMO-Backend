@@ -1861,6 +1861,10 @@ async def connect_room(
                 state.realtime_ko.set_session_id(session_id)
             if state.realtime_ja:
                 state.realtime_ja.set_session_id(session_id)
+            for session in state.participant_sessions.values():
+                session.set_session_id(session_id)
+            if state.participant_config:
+                state.participant_config.session_id = session_id
         return
 
     token_resp = await fetch_livekit_token_with_retry(
@@ -1875,6 +1879,56 @@ async def connect_room(
     state = RoomState(room=room)
     state.session_id = session_id
     rooms[room_id] = state
+
+    async def _broadcast_response(
+        source: RealtimeSession,
+        transcript: str,
+        summary_only: bool,
+        target_lang: Optional[str],
+    ) -> None:
+        tasks = []
+        for session in (state.realtime_ko, state.realtime_ja):
+            if not session:
+                continue
+            if target_lang and session.lang != target_lang:
+                continue
+            label = "trigger detected" if session is source else "trigger broadcast"
+            tasks.append(session.request_response(transcript, label, summary_only))
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    state.broadcast_handler = _broadcast_response
+    state.participant_config = ParticipantSessionConfig(
+        room_id=room_id,
+        session_id=session_id,
+        api_key=realtime_key,
+        model=realtime_model,
+        base_url=realtime_url,
+        transcribe_model=transcribe_model,
+        trigger_phrases_ko=trigger_phrases_ko,
+        trigger_phrases_ja=trigger_phrases_ja,
+        wake_cooldown_s=wake_cooldown_s,
+        vad_threshold=vad_threshold,
+        vad_prefix_ms=vad_prefix_ms,
+        vad_silence_ms=vad_silence_ms,
+        always_respond=always_respond,
+        history_max_turns=history_max_turns,
+        summary_max_chars=summary_max_chars,
+        db_history_turns=db_history_turns,
+        db_history_max_chars=db_history_max_chars,
+        db_history_scope=db_history_scope,
+        save_stt=save_stt,
+        trigger_debug=trigger_debug,
+        redis_url=redis_url,
+        stt_channel=stt_channel,
+        force_commit_ms=force_commit_ms,
+        trigger_summary_only=trigger_summary_only,
+        stt_merge_window_ms=stt_merge_window_ms,
+        stt_merge_max_chars=stt_merge_max_chars,
+        trigger_broadcast=trigger_broadcast,
+        voice_ko=voice_ko,
+        voice_ja=voice_ja,
+    )
 
     @room.on("participant_connected")
     def _on_participant_connected(participant: rtc.RemoteParticipant):
@@ -2067,26 +2121,8 @@ async def connect_room(
         trigger_broadcast=trigger_broadcast,
     )
 
-    async def _broadcast_response(
-        source: RealtimeSession,
-        transcript: str,
-        summary_only: bool,
-        target_lang: Optional[str],
-    ) -> None:
-        tasks = []
-        for session in (state.realtime_ko, state.realtime_ja):
-            if not session:
-                continue
-            if target_lang and session.lang != target_lang:
-                continue
-            label = "trigger detected" if session is source else "trigger broadcast"
-            tasks.append(session.request_response(transcript, label, summary_only))
-        if tasks:
-            await asyncio.gather(*tasks)
-
-    state.broadcast_handler = _broadcast_response
-    state.realtime_ko.set_broadcast_handler(_broadcast_response)
-    state.realtime_ja.set_broadcast_handler(_broadcast_response)
+    state.realtime_ko.set_broadcast_handler(state.broadcast_handler)
+    state.realtime_ja.set_broadcast_handler(state.broadcast_handler)
 
     await asyncio.gather(state.realtime_ko.start(), state.realtime_ja.start())
     print(f"🤖🇰🇷 [AGENT] ready lang=ko room_id={room_id} track={ko_track}")
@@ -2122,6 +2158,10 @@ async def disconnect_room(room_id: str, rooms: dict[str, RoomState]) -> None:
         await state.realtime_ko.close()
     if state.realtime_ja:
         await state.realtime_ja.close()
+    for session in list(state.participant_sessions.values()):
+        await session.close()
+    state.participant_sessions.clear()
+    state.participant_session_langs.clear()
     await maybe_await(state.room.disconnect())
     print(f"[BOOT] disconnected room_id={room_id}")
 
