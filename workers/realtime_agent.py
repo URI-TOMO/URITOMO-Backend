@@ -74,6 +74,24 @@ def _ai_log(
     )
 
 
+def _db_log(
+    level: str,
+    *,
+    event: str,
+    summary: str,
+    payload: Optional[str] = None,
+    **kv,
+) -> None:
+    _stt_log(
+        level,
+        event=event,
+        summary=summary,
+        domain="db",
+        payload=payload,
+        **kv,
+    )
+
+
 @dataclass
 class BackendTokenResponse:
     url: str
@@ -314,11 +332,15 @@ class RealtimeSession:
         always_respond: bool,
         history_max_turns: int,
         summary_max_chars: int,
+        db_history_turns: int,
+        db_history_max_chars: int,
+        db_history_scope: str,
         save_stt: bool,
         trigger_debug: bool,
         redis_url: str,
         stt_channel: str,
         force_commit_ms: int,
+        trigger_summary_only: bool,
     ) -> None:
         self.lang = lang
         self.room_id = room_id
@@ -342,12 +364,17 @@ class RealtimeSession:
         self._last_wake_ts = 0.0
         self._history_max_turns = history_max_turns
         self._summary_max_chars = summary_max_chars
+        self._db_history_turns = db_history_turns
+        self._db_history_max_chars = db_history_max_chars
+        self._db_history_scope = db_history_scope
+        self._trigger_summary_only = trigger_summary_only
         self._history: list[dict[str, str]] = []
         self._assistant_partial = ""
         self._response_in_flight = False
         self._pending_transcript: Optional[str] = None
         self._pending_force = False
         self._pending_log_label: Optional[str] = None
+        self._pending_summary_only = False
         self._save_stt = save_stt
         self._last_stt_seq: Optional[int] = None
         self._last_stt_text: Optional[str] = None
@@ -612,7 +639,14 @@ class RealtimeSession:
         except Exception as exc:
             print(f"[REALTIME] recv_loop error lang={self.lang} err={exc!r}")
 
-    async def _send_response(self, transcript: str, *, log_label: str, force: bool) -> None:
+    async def _send_response(
+        self,
+        transcript: str,
+        *,
+        log_label: str,
+        force: bool,
+        summary_only: bool,
+    ) -> None:
         now = time.monotonic()
         if not force and now - self._last_wake_ts < self._wake_cooldown_s:
             if self._trigger_debug:
@@ -630,7 +664,26 @@ class RealtimeSession:
             return
         self._last_wake_ts = now
         summary = self._build_history_summary()
-        system_text = self._build_system_prompt(summary)
+        db_context, db_total_rows, db_sent_rows = await self._build_db_history_context(
+            exclude_text=transcript if summary_only else None
+        )
+        system_text = self._build_system_prompt(summary, db_context)
+        user_prompt = transcript
+        if summary_only:
+            if self.lang == "ko":
+                user_prompt = "이전 대화 기록을 보고 너는 이 회의의 참가자 처럼 친구처럼 전체 내용을 보고 조언이나 프로젝트에 도움이 되도록 분위기를 읽고, 한명의 팀원 처럼 대답해."
+                system_text += "\n이전 대화 기록을 보고 너는 이 회의의 참가자 처럼 친구처럼 전체 내용을 보고 조언이나 프로젝트에 도움이 되도록 분위기를 읽고, 한명의 팀원 처럼 대답해."
+            else:
+                user_prompt = "前回の会話記録を見て、あなたはこの会議の参加者のように友人のように全体の内容を確認し、助言やプロジェクトに役立つように雰囲気を読み、チームメンバーのように答えてください。"
+                system_text += "\n前回の会話記録を見て、あなたはこの会議の参加者のように友人のように全体の内容を確認し、助言やプロジェクトに役立つように雰囲気を読み、チームメンバーのように答えてください。"
+            _ai_log(
+                "INFO",
+                event="ai.trigger.summary_mode",
+                summary="Trigger summary-only mode",
+                room_id=self.room_id,
+                session_id=self._session_id,
+                lang=self.lang,
+            )
         await self._send_json(
             {
                 "type": "response.create",
@@ -645,12 +698,37 @@ class RealtimeSession:
                         {
                             "type": "message",
                             "role": "user",
-                            "content": [{"type": "input_text", "text": transcript}],
+                            "content": [{"type": "input_text", "text": user_prompt}],
                         }
                     ],
                 },
             }
         )
+        if db_context:
+            _db_log(
+                "INFO",
+                event="db.history.sent",
+                summary="DB history attached",
+                room_id=self.room_id,
+                session_id=self._session_id,
+                lang=self.lang,
+                scope=self._db_history_scope,
+                records=db_sent_rows,
+                total_records=db_total_rows,
+                lines=db_context.count("\n") + 1,
+                chars=len(db_context),
+            )
+        else:
+            _db_log(
+                "INFO",
+                event="db.history.empty",
+                summary="No DB history attached",
+                room_id=self.room_id,
+                session_id=self._session_id,
+                lang=self.lang,
+                scope=self._db_history_scope,
+                total_records=db_total_rows,
+            )
         _ai_log(
             "INFO",
             event="ai.response.request",
@@ -664,10 +742,11 @@ class RealtimeSession:
             payload=transcript,
         )
 
-    def _set_pending_response(self, transcript: str, log_label: str) -> None:
+    def _set_pending_response(self, transcript: str, log_label: str, summary_only: bool) -> None:
         self._pending_transcript = transcript
         self._pending_force = True
         self._pending_log_label = log_label
+        self._pending_summary_only = summary_only
         if self._trigger_debug:
             _ai_log(
                 "INFO",
@@ -686,10 +765,12 @@ class RealtimeSession:
             return
         log_label = self._pending_log_label or "deferred response"
         force = self._pending_force
+        summary_only = self._pending_summary_only
         self._pending_transcript = None
         self._pending_log_label = None
         self._pending_force = False
-        await self._send_response(transcript, log_label=log_label, force=force)
+        self._pending_summary_only = False
+        await self._send_response(transcript, log_label=log_label, force=force, summary_only=summary_only)
 
     async def _handle_transcript(self, transcript: str) -> None:
         if not transcript:
@@ -706,8 +787,10 @@ class RealtimeSession:
                     payload=transcript,
                 )
             return
-        self._append_history("user", transcript)
         triggered = self._always_respond or self._contains_trigger_phrase(transcript)
+        summary_only = triggered and self._trigger_summary_only and not self._always_respond
+        if not summary_only:
+            self._append_history("user", transcript)
         if self._trigger_debug and not triggered and not self._always_respond:
             _ai_log(
                 "INFO",
@@ -724,12 +807,12 @@ class RealtimeSession:
         if self._response_in_flight:
             if triggered:
                 log_label = "trigger detected (deferred)" if not self._always_respond else "auto response (deferred)"
-                self._set_pending_response(transcript, log_label)
+                self._set_pending_response(transcript, log_label, summary_only)
             return
         if not triggered:
             return
         log_label = "trigger detected" if not self._always_respond else "auto response"
-        await self._send_response(transcript, log_label=log_label, force=False)
+        await self._send_response(transcript, log_label=log_label, force=False, summary_only=summary_only)
 
     def _normalize_text(self, text: str) -> str:
         cleaned = text.lower()
@@ -812,22 +895,104 @@ class RealtimeSession:
         parts.reverse()
         return " / ".join(parts)
 
-    def _build_system_prompt(self, summary: str) -> str:
+    async def _build_db_history_context(
+        self,
+        exclude_text: Optional[str] = None,
+    ) -> tuple[str, int, int]:
+        if self._db_history_turns <= 0:
+            return "", 0, 0
+        try:
+            async with AsyncSessionLocal() as session:
+                session_id = await self._resolve_live_session_id(session)
+                if self._db_history_scope == "room":
+                    query = (
+                        select(RoomSttResult)
+                        .where(RoomSttResult.room_id == self.room_id)
+                        .order_by(RoomSttResult.created_at.desc())
+                        .limit(self._db_history_turns)
+                    )
+                else:
+                    if not session_id:
+                        return "", 0, 0
+                    query = (
+                        select(RoomSttResult)
+                        .where(RoomSttResult.session_id == session_id)
+                        .order_by(RoomSttResult.seq.desc())
+                        .limit(self._db_history_turns)
+                    )
+                result = await session.execute(query)
+                rows = list(result.scalars().all())
+        except Exception as exc:
+            _db_log(
+                "WARN",
+                event="db.history.fail",
+                summary="Failed to load DB history",
+                room_id=self.room_id,
+                session_id=self._session_id,
+                error=str(exc),
+            )
+            return "", 0, 0
+
+        total_rows = len(rows)
+        if not rows:
+            return "", 0, 0
+
+        if exclude_text:
+            needle = exclude_text.strip()
+            if needle and rows:
+                latest_text = (rows[0].stt_text or "").strip()
+                if latest_text == needle:
+                    rows = rows[1:]
+
+        rows.reverse()
+        lines: list[str] = []
+        for row in rows:
+            text = (row.stt_text or "").replace("\n", " ").strip()
+            if not text:
+                continue
+            meta = row.meta or {}
+            speaker_name = meta.get("speaker_name") or "User"
+            speaker_lang = meta.get("speaker_lang") or row.user_lang or "unknown"
+            lines.append(f"{speaker_name}({speaker_lang}): {text}")
+
+        if not lines:
+            return "", total_rows, 0
+
+        max_chars = max(self._db_history_max_chars, 0)
+        if max_chars == 0:
+            return "\n".join(lines), total_rows, len(lines)
+
+        total = 0
+        selected: list[str] = []
+        for line in reversed(lines):
+            add_len = len(line) + (1 if selected else 0)
+            if total + add_len > max_chars:
+                if not selected:
+                    selected = [line[-max_chars:]]
+                break
+            selected.append(line)
+            total += add_len
+        selected.reverse()
+        return "\n".join(selected), total_rows, len(selected)
+
+    def _build_system_prompt(self, summary: str, history_context: str) -> str:
         if self.lang == "ko":
             base = (
-                "너는 음성 비서다. 아래 대화 요약을 참고해 사용자의 최신 발화를 간단히 정리하고 "
+                "너는 이 팀의 일원이자 27살이지만 머리가 총명하고 모두에게 다정하면서 용맹하다. 아래 대화 요약을 참고해 사용자의 최신 발화를 간단히 정리하고 조언을 줘."
                 "실용적인 조언을 제공하라. 반드시 한국어로만 답하라."
             )
-            if not summary:
-                return base + " 대화 요약: (없음)"
-            return base + f" 대화 요약: {summary}"
+            prompt = base + (" 대화 요약: (없음)" if not summary else f" 대화 요약: {summary}")
+            if history_context:
+                prompt += f"\n이전 대화 기록:\n{history_context}"
+            return prompt
         base = (
-            "あなたは音声アシスタントです。以下の会話要約を参考に、ユーザーの最新発話を簡潔に整理し、"
+            "あなたはこのチームの一員で、27歳ですが、頭が聡明で、皆に優しく、勇敢です。以下の会話要約を参照して、ユーザーの最新の発話を簡単に整理し、助言をしてください。"
             "実用的な助言を提供してください。日本語のみで回答してください。"
         )
-        if not summary:
-            return base + " 会話要約: (なし)"
-        return base + f" 会話要約: {summary}"
+        prompt = base + (" 会話要約: (なし)" if not summary else f" 会話要約: {summary}")
+        if history_context:
+            prompt += f"\n以前の会話記録:\n{history_context}"
+        return prompt
 
     def set_session_id(self, session_id: Optional[str]) -> None:
         if session_id:
@@ -1408,6 +1573,10 @@ async def connect_room(
     always_respond: bool,
     history_max_turns: int,
     summary_max_chars: int,
+    db_history_turns: int,
+    db_history_max_chars: int,
+    db_history_scope: str,
+    trigger_summary_only: bool,
     save_stt: bool,
     trigger_debug: bool,
     redis_url: str,
@@ -1560,6 +1729,10 @@ async def connect_room(
         always_respond=always_respond,
         history_max_turns=history_max_turns,
         summary_max_chars=summary_max_chars,
+        db_history_turns=db_history_turns,
+        db_history_max_chars=db_history_max_chars,
+        db_history_scope=db_history_scope,
+        trigger_summary_only=trigger_summary_only,
         save_stt=save_stt,
         trigger_debug=trigger_debug,
         redis_url=redis_url,
@@ -1585,6 +1758,10 @@ async def connect_room(
         always_respond=always_respond,
         history_max_turns=history_max_turns,
         summary_max_chars=summary_max_chars,
+        db_history_turns=db_history_turns,
+        db_history_max_chars=db_history_max_chars,
+        db_history_scope=db_history_scope,
+        trigger_summary_only=trigger_summary_only,
         save_stt=save_stt,
         trigger_debug=trigger_debug,
         redis_url=redis_url,
@@ -1659,6 +1836,10 @@ async def listen_room_events(
     always_respond: bool,
     history_max_turns: int,
     summary_max_chars: int,
+    db_history_turns: int,
+    db_history_max_chars: int,
+    db_history_scope: str,
+    trigger_summary_only: bool,
     save_stt: bool,
     trigger_debug: bool,
 ) -> None:
@@ -1711,6 +1892,10 @@ async def listen_room_events(
                         always_respond=always_respond,
                         history_max_turns=history_max_turns,
                         summary_max_chars=summary_max_chars,
+                        db_history_turns=db_history_turns,
+                        db_history_max_chars=db_history_max_chars,
+                        db_history_scope=db_history_scope,
+                        trigger_summary_only=trigger_summary_only,
                         save_stt=save_stt,
                         trigger_debug=trigger_debug,
                         redis_url=redis_url,
@@ -1806,12 +1991,21 @@ async def main() -> None:
         raise RuntimeError("Missing OPENAI_API_KEY")
     history_max_turns = int(os.getenv("OPENAI_HISTORY_MAX_TURNS", "0"))
     summary_max_chars = int(os.getenv("OPENAI_HISTORY_SUMMARY_MAX_CHARS", "800"))
+    db_history_turns = int(os.getenv("OPENAI_HISTORY_DB_TURNS", "12"))
+    db_history_max_chars = int(os.getenv("OPENAI_HISTORY_DB_MAX_CHARS", "1200"))
+    db_history_scope = os.getenv("OPENAI_HISTORY_DB_SCOPE", "room").strip().lower()
+    if db_history_scope not in {"room", "session"}:
+        db_history_scope = "session"
+    trigger_summary_only_value = os.getenv("OPENAI_TRIGGER_SUMMARY_ONLY", "true")
+    trigger_summary_only = trigger_summary_only_value.lower() in {"1", "true", "yes", "y", "on"}
     save_stt_value = os.getenv("OPENAI_STT_SAVE", "true")
     save_stt = save_stt_value.lower() in {"1", "true", "yes", "y", "on"}
     print(
         f"[BOOT] stt_config save_stt={save_stt} "
         f"transcribe_model={transcribe_model} output_modalities={output_modalities} "
-        f"vad_threshold={vad_threshold} force_commit_ms={force_commit_ms}"
+        f"vad_threshold={vad_threshold} force_commit_ms={force_commit_ms} "
+        f"db_history_turns={db_history_turns} db_history_scope={db_history_scope} "
+        f"trigger_summary_only={trigger_summary_only}"
     )
     trigger_debug_value = os.getenv("OPENAI_TRIGGER_DEBUG", "false")
     trigger_debug = trigger_debug_value.lower() in {"1", "true", "yes", "y", "on"}
@@ -1871,6 +2065,10 @@ async def main() -> None:
             always_respond=always_respond,
             history_max_turns=history_max_turns,
             summary_max_chars=summary_max_chars,
+            db_history_turns=db_history_turns,
+            db_history_max_chars=db_history_max_chars,
+            db_history_scope=db_history_scope,
+            trigger_summary_only=trigger_summary_only,
             save_stt=save_stt,
             trigger_debug=trigger_debug,
             redis_url=redis_url,
@@ -1906,6 +2104,10 @@ async def main() -> None:
         always_respond=always_respond,
         history_max_turns=history_max_turns,
         summary_max_chars=summary_max_chars,
+        db_history_turns=db_history_turns,
+        db_history_max_chars=db_history_max_chars,
+        db_history_scope=db_history_scope,
+        trigger_summary_only=trigger_summary_only,
         save_stt=save_stt,
         trigger_debug=trigger_debug,
     )
