@@ -8,8 +8,9 @@ from datetime import datetime
 
 from pydantic import BaseModel
 from app.infra.db import get_db
-from app.models.room import Room, RoomMember
+from app.models.room import Room, RoomMember, RoomSummary
 from app.models.stt import RoomSttResult
+from uuid import uuid4
 from app.translation.openai_service import openai_service
 from app.core.logging import get_logger
 
@@ -229,6 +230,36 @@ Respond ONLY with valid JSON in this exact format:
         past_time_str = f"{past_time} min" if past_time > 0 else "Unknown"
         
         meeting_date_str = room.created_at.strftime("%Y-%m-%d")
+        
+        # 10. Save to Database
+        try:
+            summary_id = f"sum_{uuid4().hex}"
+            new_summary = RoomSummary(
+                id=summary_id,
+                room_id=room_id,
+                main_point=result.get("main_point", ""),
+                task=result.get("task", ""),
+                decided=result.get("decided", ""),
+                meeting_date=room.created_at,
+                past_time=past_time_str,
+                member_count=member_count,
+                message_count=total_messages,
+                created_at=datetime.utcnow()
+            )
+            
+            # Note: In mock mode, if room_id doesn't exist in actual DB, 
+            # this will fail due to foreign key constraint.
+            if not use_mock:
+                db.add(new_summary)
+                await db.commit()
+                logger.info(f"Summary saved to database with ID: {summary_id}")
+            else:
+                logger.info(f"Mock mode active, skipping DB save for room {room_id}")
+                
+        except Exception as db_err:
+            logger.error(f"Failed to save summary to database: {db_err}")
+            # We don't raise here to ensure user still gets the response even if save fails
+            # But in a real app, you might want to handle this differently
         
         logger.info(f"Summary generated successfully for room {room_id} with {total_messages} STT messages")
         

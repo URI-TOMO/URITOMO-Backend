@@ -62,6 +62,24 @@ class RoomSummary(Base):
     session: Mapped[Optional["RoomLiveSession"]] = relationship("RoomLiveSession", back_populates="summaries")
 
 
+class MeetingSummaryRecord(Base):
+    __tablename__ = "meeting_summary_records"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    room_id: Mapped[str] = mapped_column(String(64), nullable=False)  # No ForeignKey for flexibility
+    
+    main_point: Mapped[str] = mapped_column(Text, nullable=False)
+    task: Mapped[str] = mapped_column(Text, nullable=False)
+    decided: Mapped[str] = mapped_column(Text, nullable=False)
+    
+    meeting_date: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    past_time: Mapped[str] = mapped_column(String(32), nullable=False)
+    member_count: Mapped[int] = mapped_column(nullable=False)
+    message_count: Mapped[int] = mapped_column(nullable=False)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=datetime.utcnow)
+
+
 
 class Room(Base):
     __tablename__ = "rooms"
