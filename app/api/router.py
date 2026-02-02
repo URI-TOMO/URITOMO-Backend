@@ -42,17 +42,9 @@ api_router.include_router(livekit_router, dependencies=[Depends(security_scheme)
 api_router.include_router(meeting_ws_router)
 
 # 3. Summary Routes (Protected)
-from app.api.summary.documents import router as summary_documents_router
 from app.api.summary.main import router as summary_main_router
-from app.api.summary.meeting_member import router as summary_member_router
-from app.api.summary.translation_log import router as summary_translation_log_router
-from app.api.summary.setup_mock import router as summary_setup_mock_router
 
-api_router.include_router(summary_documents_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(summary_main_router, dependencies=[Depends(security_scheme)])
-api_router.include_router(summary_member_router, dependencies=[Depends(security_scheme)])
-api_router.include_router(summary_translation_log_router, dependencies=[Depends(security_scheme)])
-api_router.include_router(summary_setup_mock_router, dependencies=[Depends(security_scheme)])
 
 # 4. Translation Routes
 from app.translation.api import router as translation_router
