@@ -971,7 +971,7 @@ class RealtimeSession:
         target_lang = normalize_lang(self._last_speaker_lang) or normalize_lang(self.lang)
         if self._broadcast_handler:
             if self._trigger_broadcast:
-                await self._broadcast_handler(self, transcript, summary_only, target_lang)
+                await self._broadcast_handler(self, transcript, summary_only, None)
                 if not self._responses_enabled:
                     return
                 return
