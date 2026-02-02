@@ -341,6 +341,8 @@ class RealtimeSession:
         stt_channel: str,
         force_commit_ms: int,
         trigger_summary_only: bool,
+        stt_merge_window_ms: int,
+        stt_merge_max_chars: int,
     ) -> None:
         self.lang = lang
         self.room_id = room_id
@@ -382,6 +384,13 @@ class RealtimeSession:
         self._stt_channel = stt_channel
         self._force_commit_ms = max(force_commit_ms, 0)
         self._force_commit_s = self._force_commit_ms / 1000.0 if self._force_commit_ms else 0.0
+
+        self._stt_merge_window_s = max(stt_merge_window_ms, 0) / 1000.0
+        self._stt_merge_max_chars = max(stt_merge_max_chars, 0)
+        self._stt_buffer = ""
+        self._stt_buffer_speaker_id: Optional[str] = None
+        self._stt_buffer_last_ts = 0.0
+        self._stt_flush_task: Optional[asyncio.Task] = None
 
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._send_task: Optional[asyncio.Task] = None
@@ -558,9 +567,7 @@ class RealtimeSession:
                 }:
                     transcript = data.get("transcript") or data.get("text") or ""
                     if transcript:
-                        print(self._format_stt_block(transcript))
-                        asyncio.create_task(self._save_transcript(transcript))
-                    await self._handle_transcript(transcript)
+                        await self._queue_transcript(transcript)
                 elif event_type in {
                     "conversation.item.input_audio_transcription.delta",
                     "input_audio_transcription.delta",
@@ -638,6 +645,74 @@ class RealtimeSession:
             raise
         except Exception as exc:
             print(f"[REALTIME] recv_loop error lang={self.lang} err={exc!r}")
+
+    async def _queue_transcript(self, transcript: str) -> None:
+        if not transcript:
+            return
+        if self._stt_merge_window_s <= 0:
+            print(self._format_stt_block(transcript))
+            asyncio.create_task(self._save_transcript(transcript))
+            await self._handle_transcript(transcript)
+            return
+
+        now = time.monotonic()
+        speaker_id = self._last_speaker_identity
+
+        should_flush = False
+        reason = None
+        if self._stt_buffer:
+            if speaker_id and self._stt_buffer_speaker_id and speaker_id != self._stt_buffer_speaker_id:
+                should_flush = True
+                reason = "speaker_change"
+            elif now - self._stt_buffer_last_ts > self._stt_merge_window_s:
+                should_flush = True
+                reason = "gap"
+            elif self._stt_merge_max_chars and len(self._stt_buffer) >= self._stt_merge_max_chars:
+                should_flush = True
+                reason = "max_chars"
+
+        if should_flush:
+            await self._flush_stt_buffer(reason or "gap")
+
+        if not self._stt_buffer:
+            self._stt_buffer = transcript.strip()
+            self._stt_buffer_speaker_id = speaker_id
+        else:
+            sep = " "
+            self._stt_buffer = f"{self._stt_buffer.rstrip()}{sep}{transcript.strip()}"
+        self._stt_buffer_last_ts = now
+
+        if self._stt_flush_task and not self._stt_flush_task.done():
+            self._stt_flush_task.cancel()
+        self._stt_flush_task = asyncio.create_task(self._flush_after_delay())
+
+    async def _flush_after_delay(self) -> None:
+        try:
+            await asyncio.sleep(self._stt_merge_window_s)
+            await self._flush_stt_buffer("idle")
+        except asyncio.CancelledError:
+            return
+
+    async def _flush_stt_buffer(self, reason: str) -> None:
+        text = (self._stt_buffer or "").strip()
+        if not text:
+            return
+        self._stt_buffer = ""
+        self._stt_buffer_speaker_id = None
+        self._stt_buffer_last_ts = 0.0
+        _stt_log(
+            "INFO",
+            event="stt.merge.flush",
+            summary="Merged STT flush",
+            room_id=self.room_id,
+            session_id=self._session_id,
+            speaker_id=self._last_speaker_identity,
+            reason=reason,
+            chars=len(text),
+        )
+        print(self._format_stt_block(text))
+        asyncio.create_task(self._save_transcript(text))
+        await self._handle_transcript(text)
 
     async def _send_response(
         self,
@@ -1582,6 +1657,8 @@ async def connect_room(
     redis_url: str,
     stt_channel: str,
     force_commit_ms: int,
+    stt_merge_window_ms: int,
+    stt_merge_max_chars: int,
 ) -> None:
     if room_id in rooms:
         state = rooms.get(room_id)
@@ -1738,6 +1815,8 @@ async def connect_room(
         redis_url=redis_url,
         stt_channel=stt_channel,
         force_commit_ms=force_commit_ms,
+        stt_merge_window_ms=stt_merge_window_ms,
+        stt_merge_max_chars=stt_merge_max_chars,
     )
     state.realtime_ja = RealtimeSession(
         lang="ja",
@@ -1767,6 +1846,8 @@ async def connect_room(
         redis_url=redis_url,
         stt_channel=stt_channel,
         force_commit_ms=force_commit_ms,
+        stt_merge_window_ms=stt_merge_window_ms,
+        stt_merge_max_chars=stt_merge_max_chars,
     )
 
     await asyncio.gather(state.realtime_ko.start(), state.realtime_ja.start())
@@ -1842,6 +1923,8 @@ async def listen_room_events(
     trigger_summary_only: bool,
     save_stt: bool,
     trigger_debug: bool,
+    stt_merge_window_ms: int,
+    stt_merge_max_chars: int,
 ) -> None:
     redis = aioredis.from_url(redis_url, encoding="utf-8", decode_responses=True)
     pubsub = redis.pubsub()
@@ -1900,6 +1983,8 @@ async def listen_room_events(
                         trigger_debug=trigger_debug,
                         redis_url=redis_url,
                         stt_channel=stt_channel,
+                        stt_merge_window_ms=stt_merge_window_ms,
+                        stt_merge_max_chars=stt_merge_max_chars,
                     )
                 except Exception as exc:
                     print(f"[EVENT] join failed room_id={room_id} error={exc!r}")
@@ -1982,7 +2067,7 @@ async def main() -> None:
         wake_cooldown_s = 0.0
     vad_threshold = float(os.getenv("OPENAI_REALTIME_VAD_THRESHOLD", "0.5"))
     vad_prefix_ms = int(os.getenv("OPENAI_REALTIME_VAD_PREFIX_MS", "300"))
-    vad_silence_ms = int(os.getenv("OPENAI_REALTIME_VAD_SILENCE_MS", "500"))
+    vad_silence_ms = int(os.getenv("OPENAI_REALTIME_VAD_SILENCE_MS", "800"))
     force_commit_ms = int(os.getenv("OPENAI_REALTIME_FORCE_COMMIT_MS", "0"))
 
     if not backend:
@@ -1998,6 +2083,8 @@ async def main() -> None:
         db_history_scope = "session"
     trigger_summary_only_value = os.getenv("OPENAI_TRIGGER_SUMMARY_ONLY", "true")
     trigger_summary_only = trigger_summary_only_value.lower() in {"1", "true", "yes", "y", "on"}
+    stt_merge_window_ms = int(os.getenv("OPENAI_STT_MERGE_WINDOW_MS", "900"))
+    stt_merge_max_chars = int(os.getenv("OPENAI_STT_MERGE_MAX_CHARS", "180"))
     save_stt_value = os.getenv("OPENAI_STT_SAVE", "true")
     save_stt = save_stt_value.lower() in {"1", "true", "yes", "y", "on"}
     print(
@@ -2005,7 +2092,8 @@ async def main() -> None:
         f"transcribe_model={transcribe_model} output_modalities={output_modalities} "
         f"vad_threshold={vad_threshold} force_commit_ms={force_commit_ms} "
         f"db_history_turns={db_history_turns} db_history_scope={db_history_scope} "
-        f"trigger_summary_only={trigger_summary_only}"
+        f"trigger_summary_only={trigger_summary_only} "
+        f"merge_window_ms={stt_merge_window_ms} merge_max_chars={stt_merge_max_chars}"
     )
     trigger_debug_value = os.getenv("OPENAI_TRIGGER_DEBUG", "false")
     trigger_debug = trigger_debug_value.lower() in {"1", "true", "yes", "y", "on"}
@@ -2073,6 +2161,8 @@ async def main() -> None:
             trigger_debug=trigger_debug,
             redis_url=redis_url,
             stt_channel=stt_channel,
+            stt_merge_window_ms=stt_merge_window_ms,
+            stt_merge_max_chars=stt_merge_max_chars,
         )
 
     await listen_room_events(
@@ -2110,6 +2200,8 @@ async def main() -> None:
         trigger_summary_only=trigger_summary_only,
         save_stt=save_stt,
         trigger_debug=trigger_debug,
+        stt_merge_window_ms=stt_merge_window_ms,
+        stt_merge_max_chars=stt_merge_max_chars,
     )
 
 
