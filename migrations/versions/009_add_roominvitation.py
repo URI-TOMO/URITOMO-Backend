@@ -1,7 +1,7 @@
 """Add_RoomInvitation
 
 Revision ID: 009
-Revises: 008
+Revises: 008_add_chat_msg_trans_cols
 Create Date: 2026-02-01 12:37:01.659686
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = '009'
-down_revision: Union[str, None] = '008'
+down_revision: Union[str, None] = '008_add_chat_msg_trans_cols'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
