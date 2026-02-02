@@ -343,6 +343,7 @@ class RealtimeSession:
         trigger_summary_only: bool,
         stt_merge_window_ms: int,
         stt_merge_max_chars: int,
+        trigger_broadcast: bool,
     ) -> None:
         self.lang = lang
         self.room_id = room_id
@@ -370,6 +371,7 @@ class RealtimeSession:
         self._db_history_max_chars = db_history_max_chars
         self._db_history_scope = db_history_scope
         self._trigger_summary_only = trigger_summary_only
+        self._trigger_broadcast = trigger_broadcast
         self._history: list[dict[str, str]] = []
         self._assistant_partial = ""
         self._response_in_flight = False
@@ -391,6 +393,10 @@ class RealtimeSession:
         self._stt_buffer_speaker_id: Optional[str] = None
         self._stt_buffer_last_ts = 0.0
         self._stt_flush_task: Optional[asyncio.Task] = None
+        self._broadcast_handler = None
+
+    def set_broadcast_handler(self, handler) -> None:
+        self._broadcast_handler = handler
 
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._send_task: Optional[asyncio.Task] = None
@@ -746,11 +752,12 @@ class RealtimeSession:
         user_prompt = transcript
         if summary_only:
             if self.lang == "ko":
+                
                 user_prompt = "이전 대화 내용을 바탕으로 팀원처럼 자연스럽게 답변해줘."
-                system_text += "\n너는 이 회의의 참가자처럼 분위기를 읽고, 조언이나 프로젝트에 도움이 되도록 팀원처럼 답변해라."
+                system_text += "\n너는 이 팀의 일원으로, 대학생이며, 반말로 해도 되고, 성격은 밝고, 친절하고, 조금 양아치 스럽기도 하고, 바람둥이야."
             else:
                 user_prompt = "以前の会話内容を踏まえて、チームメンバーのように自然に回答してください。"
-                system_text += "\nあなたは会議の参加者として雰囲気を読み、助言やプロジェクトに役立つようにチームメンバーとして回答せよ。"
+                system_text += "\n君はこのチームの一員で、大学生で、タメ口でも構わないし、性格は明るく、親切で、ちょっとヤンキーっぽくて、浮気者だ。"
             _ai_log(
                 "INFO",
                 event="ai.trigger.team_mode",
@@ -816,6 +823,12 @@ class RealtimeSession:
             force=force,
             payload=transcript,
         )
+
+    async def request_response(self, transcript: str, log_label: str, summary_only: bool) -> None:
+        if self._response_in_flight:
+            self._set_pending_response(transcript, log_label, summary_only)
+            return
+        await self._send_response(transcript, log_label=log_label, force=False, summary_only=summary_only)
 
     def _set_pending_response(self, transcript: str, log_label: str, summary_only: bool) -> None:
         self._pending_transcript = transcript
@@ -887,6 +900,9 @@ class RealtimeSession:
         if not triggered:
             return
         log_label = "trigger detected" if not self._always_respond else "auto response"
+        if self._trigger_broadcast and self._broadcast_handler:
+            await self._broadcast_handler(self, transcript, summary_only)
+            return
         await self._send_response(transcript, log_label=log_label, force=False, summary_only=summary_only)
 
     def _normalize_text(self, text: str) -> str:
@@ -1053,16 +1069,16 @@ class RealtimeSession:
     def _build_system_prompt(self, summary: str, history_context: str) -> str:
         if self.lang == "ko":
             base = (
-                "너는 이 팀의 일원이자 27살이지만 머리가 총명하고 모두에게 다정하면서 용맹하다. 아래 대화 요약을 참고해 사용자의 최신 발화를 간단히 정리하고 조언을 줘."
-                "실용적인 조언을 제공하라. 반드시 한국어로만 답하라."
+                "너는 이 팀의 일원으로, 대학생이며, 반말로 해도 되고, 성격은 밝고, 친절하고, 조금 양아치 스럽기도 하고, 바람둥이야. "
+                "반드시 한국어로만 답하라."
             )
             prompt = base + (" 대화 요약: (없음)" if not summary else f" 대화 요약: {summary}")
             if history_context:
                 prompt += f"\n이전 대화 기록:\n{history_context}"
             return prompt
         base = (
-            "あなたはこのチームの一員で、27歳ですが、頭が聡明で、皆に優しく、勇敢です。以下の会話要約を参照して、ユーザーの最新の発話を簡単に整理し、助言をしてください。"
-            "実用的な助言を提供してください。日本語のみで回答してください。"
+            "君はこのチームの一員で、大学生で、タメ口でも構わないし、性格は明るく、親切で、ちょっとヤンキーっぽくて、浮気者だ。"
+            "日本語のみで回答してください。"
         )
         prompt = base + (" 会話要約: (なし)" if not summary else f" 会話要約: {summary}")
         if history_context:
@@ -1657,6 +1673,7 @@ async def connect_room(
     redis_url: str,
     stt_channel: str,
     force_commit_ms: int,
+    trigger_broadcast: bool,
     stt_merge_window_ms: int,
     stt_merge_max_chars: int,
 ) -> None:
@@ -1817,6 +1834,7 @@ async def connect_room(
         force_commit_ms=force_commit_ms,
         stt_merge_window_ms=stt_merge_window_ms,
         stt_merge_max_chars=stt_merge_max_chars,
+        trigger_broadcast=trigger_broadcast,
     )
     state.realtime_ja = RealtimeSession(
         lang="ja",
@@ -1848,7 +1866,21 @@ async def connect_room(
         force_commit_ms=force_commit_ms,
         stt_merge_window_ms=stt_merge_window_ms,
         stt_merge_max_chars=stt_merge_max_chars,
+        trigger_broadcast=trigger_broadcast,
     )
+
+    async def _broadcast_response(source: RealtimeSession, transcript: str, summary_only: bool) -> None:
+        tasks = []
+        for session in (state.realtime_ko, state.realtime_ja):
+            if not session:
+                continue
+            label = "trigger detected" if session is source else "trigger broadcast"
+            tasks.append(session.request_response(transcript, label, summary_only))
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    state.realtime_ko.set_broadcast_handler(_broadcast_response)
+    state.realtime_ja.set_broadcast_handler(_broadcast_response)
 
     await asyncio.gather(state.realtime_ko.start(), state.realtime_ja.start())
     print(f"🤖🇰🇷 [AGENT] ready lang=ko room_id={room_id} track={ko_track}")
@@ -1921,6 +1953,7 @@ async def listen_room_events(
     db_history_max_chars: int,
     db_history_scope: str,
     trigger_summary_only: bool,
+    trigger_broadcast: bool,
     save_stt: bool,
     trigger_debug: bool,
     stt_merge_window_ms: int,
@@ -1979,6 +2012,7 @@ async def listen_room_events(
                         db_history_max_chars=db_history_max_chars,
                         db_history_scope=db_history_scope,
                         trigger_summary_only=trigger_summary_only,
+                        trigger_broadcast=trigger_broadcast,
                         save_stt=save_stt,
                         trigger_debug=trigger_debug,
                         redis_url=redis_url,
@@ -2083,6 +2117,8 @@ async def main() -> None:
         db_history_scope = "session"
     trigger_summary_only_value = os.getenv("OPENAI_TRIGGER_SUMMARY_ONLY", "true")
     trigger_summary_only = trigger_summary_only_value.lower() in {"1", "true", "yes", "y", "on"}
+    trigger_broadcast_value = os.getenv("OPENAI_TRIGGER_BROADCAST", "true")
+    trigger_broadcast = trigger_broadcast_value.lower() in {"1", "true", "yes", "y", "on"}
     stt_merge_window_ms = int(os.getenv("OPENAI_STT_MERGE_WINDOW_MS", "900"))
     stt_merge_max_chars = int(os.getenv("OPENAI_STT_MERGE_MAX_CHARS", "180"))
     save_stt_value = os.getenv("OPENAI_STT_SAVE", "true")
@@ -2092,7 +2128,7 @@ async def main() -> None:
         f"transcribe_model={transcribe_model} output_modalities={output_modalities} "
         f"vad_threshold={vad_threshold} force_commit_ms={force_commit_ms} "
         f"db_history_turns={db_history_turns} db_history_scope={db_history_scope} "
-        f"trigger_summary_only={trigger_summary_only} "
+        f"trigger_summary_only={trigger_summary_only} trigger_broadcast={trigger_broadcast} "
         f"merge_window_ms={stt_merge_window_ms} merge_max_chars={stt_merge_max_chars}"
     )
     trigger_debug_value = os.getenv("OPENAI_TRIGGER_DEBUG", "false")
@@ -2157,6 +2193,7 @@ async def main() -> None:
             db_history_max_chars=db_history_max_chars,
             db_history_scope=db_history_scope,
             trigger_summary_only=trigger_summary_only,
+            trigger_broadcast=trigger_broadcast,
             save_stt=save_stt,
             trigger_debug=trigger_debug,
             redis_url=redis_url,
@@ -2198,6 +2235,7 @@ async def main() -> None:
         db_history_max_chars=db_history_max_chars,
         db_history_scope=db_history_scope,
         trigger_summary_only=trigger_summary_only,
+        trigger_broadcast=trigger_broadcast,
         save_stt=save_stt,
         trigger_debug=trigger_debug,
         stt_merge_window_ms=stt_merge_window_ms,
