@@ -752,12 +752,9 @@ class RealtimeSession:
         user_prompt = transcript
         if summary_only:
             if self.lang == "ko":
-                
                 user_prompt = "이전 대화 내용을 바탕으로 팀원처럼 자연스럽게 답변해줘."
-                system_text += "\n너는 이 팀의 일원으로, 대학생이며, 반말로 해도 되고, 성격은 밝고, 친절하고, 조금 양아치 스럽기도 하고, 바람둥이야."
             else:
                 user_prompt = "以前の会話内容を踏まえて、チームメンバーのように自然に回答してください。"
-                system_text += "\n君はこのチームの一員で、大学生で、タメ口でも構わないし、性格は明るく、親切で、ちょっとヤンキーっぽくて、浮気者だ。"
             _ai_log(
                 "INFO",
                 event="ai.trigger.team_mode",
@@ -900,6 +897,16 @@ class RealtimeSession:
         if not triggered:
             return
         log_label = "trigger detected" if not self._always_respond else "auto response"
+        if self._trigger_debug:
+            _ai_log(
+                "INFO",
+                event="ai.trigger.hit",
+                summary="Trigger matched",
+                room_id=self.room_id,
+                session_id=self._session_id,
+                lang=self.lang,
+                payload=transcript,
+            )
         if self._trigger_broadcast and self._broadcast_handler:
             await self._broadcast_handler(self, transcript, summary_only)
             return
@@ -1069,7 +1076,7 @@ class RealtimeSession:
     def _build_system_prompt(self, summary: str, history_context: str) -> str:
         if self.lang == "ko":
             base = (
-                "너는 이 팀의 일원으로, 대학생이며, 반말로 해도 되고, 성격은 밝고, 친절하고, 조금 양아치 스럽기도 하고, 바람둥이야. "
+                "너는 이 팀의 일원으로, 대학생이며, 반말로 해도 되고, 성격은 밝고, 친절하고, 조금 양아치 스럽기도 하고, 바람둥이야. 부산사투리로 대답해."
                 "반드시 한국어로만 답하라."
             )
             prompt = base + (" 대화 요약: (없음)" if not summary else f" 대화 요약: {summary}")
@@ -1077,7 +1084,7 @@ class RealtimeSession:
                 prompt += f"\n이전 대화 기록:\n{history_context}"
             return prompt
         base = (
-            "君はこのチームの一員で、大学生で、タメ口でも構わないし、性格は明るく、親切で、ちょっとヤンキーっぽくて、浮気者だ。"
+            "君はこのチームの一員で、大学生で、タメ口でも構わないし、性格は明るく、親切で、ちょっとヤンキーっぽくて、浮気者だ。 関西弁で答えて。"
             "日本語のみで回答してください。"
         )
         prompt = base + (" 会話要約: (なし)" if not summary else f" 会話要約: {summary}")
@@ -2093,6 +2100,12 @@ async def main() -> None:
         for part in re.split(r"[,\n、，]+", trigger_ja_raw)
         if part.strip()
     ]
+    trigger_shared_value = os.getenv("OPENAI_TRIGGER_SHARED", "true")
+    trigger_shared = trigger_shared_value.lower() in {"1", "true", "yes", "y", "on"}
+    if trigger_shared:
+        merged = list(dict.fromkeys(trigger_phrases_ko + trigger_phrases_ja))
+        trigger_phrases_ko = merged
+        trigger_phrases_ja = merged
     wake_cooldown_raw = os.getenv("OPENAI_WAKE_COOLDOWN_SECONDS")
     wake_cooldown_s = float(wake_cooldown_raw or "2.0")
     always_respond_value = os.getenv("OPENAI_ALWAYS_RESPOND", "false")
@@ -2129,6 +2142,7 @@ async def main() -> None:
         f"vad_threshold={vad_threshold} force_commit_ms={force_commit_ms} "
         f"db_history_turns={db_history_turns} db_history_scope={db_history_scope} "
         f"trigger_summary_only={trigger_summary_only} trigger_broadcast={trigger_broadcast} "
+        f"trigger_shared={trigger_shared} "
         f"merge_window_ms={stt_merge_window_ms} merge_max_chars={stt_merge_max_chars}"
     )
     trigger_debug_value = os.getenv("OPENAI_TRIGGER_DEBUG", "false")
