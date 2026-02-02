@@ -37,7 +37,7 @@ if [ -f .env ]; then
     fi
 fi
 
-LAN_IP="172.21.25.51"
+LAN_IP=""
 if command -v ipconfig >/dev/null 2>&1; then
     LAN_IP=$(ipconfig getifaddr en0 2>/dev/null)
     if [ -z "$LAN_IP" ]; then
