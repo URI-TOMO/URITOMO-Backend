@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, JSON, String
+from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -39,6 +39,30 @@ class RoomInvitation(Base):
 
 
 
+class RoomSummary(Base):
+    __tablename__ = "room_summaries"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    room_id: Mapped[str] = mapped_column(ForeignKey("rooms.id"), nullable=False)
+    session_id: Mapped[Optional[str]] = mapped_column(ForeignKey("room_live_sessions.id"), nullable=True)
+    
+    main_point: Mapped[str] = mapped_column(Text, nullable=False)
+    task: Mapped[str] = mapped_column(Text, nullable=False)
+    decided: Mapped[str] = mapped_column(Text, nullable=False)
+    
+    meeting_date: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    past_time: Mapped[str] = mapped_column(String(32), nullable=False)
+    member_count: Mapped[int] = mapped_column(nullable=False)
+    message_count: Mapped[int] = mapped_column(nullable=False)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=datetime.utcnow)
+
+    # Relationships
+    room: Mapped["Room"] = relationship("Room", back_populates="summaries")
+    session: Mapped[Optional["RoomLiveSession"]] = relationship("RoomLiveSession", back_populates="summaries")
+
+
+
 class Room(Base):
     __tablename__ = "rooms"
 
@@ -64,6 +88,7 @@ class Room(Base):
     ai_responses: Mapped[List["RoomAiResponse"]] = relationship("RoomAiResponse", back_populates="room")
     live_sessions: Mapped[List["RoomLiveSession"]] = relationship("RoomLiveSession", back_populates="room")
     invitations: Mapped[List["RoomInvitation"]] = relationship("RoomInvitation", back_populates="room")
+    summaries: Mapped[List["RoomSummary"]] = relationship("RoomSummary", back_populates="room")
 
 
 
@@ -120,6 +145,7 @@ class RoomLiveSession(Base):
     session_members: Mapped[List["RoomLiveSessionMember"]] = relationship("RoomLiveSessionMember", back_populates="session")
     stt_results: Mapped[List["RoomSttResult"]] = relationship("RoomSttResult", back_populates="session")
     ai_responses: Mapped[List["RoomAiResponse"]] = relationship("RoomAiResponse", back_populates="session")
+    summaries: Mapped[List["RoomSummary"]] = relationship("RoomSummary", back_populates="session")
 
 
 class RoomLiveSessionMember(Base):

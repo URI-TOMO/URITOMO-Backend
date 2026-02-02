@@ -10,13 +10,17 @@ from functools import lru_cache
 
 from pydantic import Field, validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+import os
+
+# Project root directory
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=os.path.join(BASE_DIR, ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
