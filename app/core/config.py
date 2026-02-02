@@ -45,10 +45,6 @@ class Settings(BaseSettings):
     redis_db: int = 0
     redis_session_ttl: int = 3600  # 1 hour
 
-    # Background Worker
-    worker_job_timeout: int = 600  # 10 minutes
-    worker_result_ttl: int = 3600  # 1 hour
-
     # Qdrant
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
@@ -105,6 +101,12 @@ class Settings(BaseSettings):
     # Summary Settings
     summary_provider: Literal["OPENAI", "MOCK"] = "MOCK"
     summary_model: str = "gpt-4-turbo-preview"
+
+    # Background Worker
+    worker_queues: list[str] = ["default", "high", "low"]
+    worker_result_ttl: int = 3600
+    worker_job_timeout: int = 600
+    worker_service_key: Optional[str] = None
 
     # CORS
     cors_origins: list[str] = [
