@@ -671,15 +671,15 @@ class RealtimeSession:
         user_prompt = transcript
         if summary_only:
             if self.lang == "ko":
-                user_prompt = "이전 대화 기록을 보고 너는 이 회의의 참가자 처럼 친구처럼 전체 내용을 보고 조언이나 프로젝트에 도움이 되도록 분위기를 읽고, 한명의 팀원 처럼 대답해."
-                system_text += "\n이전 대화 기록을 보고 너는 이 회의의 참가자 처럼 친구처럼 전체 내용을 보고 조언이나 프로젝트에 도움이 되도록 분위기를 읽고, 한명의 팀원 처럼 대답해."
+                user_prompt = "이전 대화 내용을 바탕으로 팀원처럼 자연스럽게 답변해줘."
+                system_text += "\n너는 이 회의의 참가자처럼 분위기를 읽고, 조언이나 프로젝트에 도움이 되도록 팀원처럼 답변해라."
             else:
-                user_prompt = "前回の会話記録を見て、あなたはこの会議の参加者のように友人のように全体の内容を確認し、助言やプロジェクトに役立つように雰囲気を読み、チームメンバーのように答えてください。"
-                system_text += "\n前回の会話記録を見て、あなたはこの会議の参加者のように友人のように全体の内容を確認し、助言やプロジェクトに役立つように雰囲気を読み、チームメンバーのように答えてください。"
+                user_prompt = "以前の会話内容を踏まえて、チームメンバーのように自然に回答してください。"
+                system_text += "\nあなたは会議の参加者として雰囲気を読み、助言やプロジェクトに役立つようにチームメンバーとして回答せよ。"
             _ai_log(
                 "INFO",
-                event="ai.trigger.summary_mode",
-                summary="Trigger summary-only mode",
+                event="ai.trigger.team_mode",
+                summary="Trigger team-mode response",
                 room_id=self.room_id,
                 session_id=self._session_id,
                 lang=self.lang,
