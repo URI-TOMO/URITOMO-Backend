@@ -213,8 +213,8 @@ async def handle_chat_message(room_id: str, user_id: str, data: dict):
                 "display_name": member.display_name,
                 "text": new_message.text,
                 "lang": new_message.lang,
-                "translated_text": None,
-                "translated_lang": None,
+                "translated_text": new_message.translated_text,
+                "translated_lang": new_message.translated_lang,
                 "created_at": to_jst_iso(new_message.created_at),
             }
         }

@@ -2,8 +2,21 @@ from typing import Dict, List, Set
 from fastapi import WebSocket
 
 import logging
+import os
 
 logger = logging.getLogger("uritomo.ws")
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+LOG_WS_BROADCAST = _env_bool("WS_BROADCAST_LOG", True)
+LOG_WS_BROADCAST_PAYLOAD = _env_bool("WS_BROADCAST_LOG_PAYLOAD", True)
+
 
 class ConnectionManager:
     def __init__(self):
@@ -54,7 +67,17 @@ class ConnectionManager:
                 payload = json.dumps(message, ensure_ascii=False, default=str)
             except Exception:
                 payload = str(message)
-            logger.info(f"🩵🩵🩵🩵🩵🩵 WS Broadcast | Room: {room_id} | Targets: {count} | Payload: {payload}")
+            if LOG_WS_BROADCAST:
+                if LOG_WS_BROADCAST_PAYLOAD:
+                    logger.info(
+                        f"🩵🩵🩵🩵🩵🩵 WS Broadcast | Room: {room_id} "
+                        f"| Targets: {count} | Payload: {payload}"
+                    )
+                else:
+                    logger.info(
+                        f"🩵🩵🩵🩵🩵🩵 WS Broadcast | Room: {room_id} "
+                        f"| Targets: {count}"
+                    )
             for connection in self.active_rooms[room_id]:
                 try:
                     await connection.send_json(message)

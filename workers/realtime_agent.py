@@ -36,6 +36,19 @@ REALTIME_MIN_COMMIT_MS = 100
 STT_LOGGER = get_event_logger("uritomo.stt.worker")
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+LOG_AUDIO = _env_bool("LIVEKIT_LOG_AUDIO", True)
+LOG_VAD = _env_bool("OPENAI_REALTIME_LOG_VAD", True)
+LOG_STT_DELTA = _env_bool("OPENAI_REALTIME_LOG_STT_DELTA", True)
+LOG_STT_SEGMENT = _env_bool("OPENAI_REALTIME_LOG_STT_SEGMENT", True)
+
+
 def _stt_log(
     level: str,
     *,
@@ -619,7 +632,7 @@ class RealtimeSession:
                     "input_audio_transcription.delta",
                 }:
                     delta_text = data.get("delta") or data.get("text") or ""
-                    if delta_text:
+                    if LOG_STT_DELTA and delta_text:
                         print(
                             f"✨✍️✨ [STT] speaker=({self._speaker_tag()}) "
                             f"session_lang={self.lang} delta={delta_text!r} ✨✍️✨"
@@ -629,15 +642,17 @@ class RealtimeSession:
                     "input_audio_transcription.segment",
                 }:
                     segment_text = data.get("text") or ""
-                    if segment_text:
+                    if LOG_STT_SEGMENT and segment_text:
                         print(
                             f"✨🧩✨ [STT] speaker=({self._speaker_tag()}) "
                             f"session_lang={self.lang} segment={segment_text!r} ✨🧩✨"
                         )
                 elif event_type == "input_audio_buffer.speech_started":
-                    print(f"[REALTIME] vad.started lang={self.lang}")
+                    if LOG_VAD:
+                        print(f"[REALTIME] vad.started lang={self.lang}")
                 elif event_type == "input_audio_buffer.speech_stopped":
-                    print(f"[REALTIME] vad.stopped lang={self.lang}")
+                    if LOG_VAD:
+                        print(f"[REALTIME] vad.stopped lang={self.lang}")
                 elif event_type == "input_audio_buffer.committed":
                     print(f"[REALTIME] buffer.committed lang={self.lang}")
                     self._buffered_ms = 0.0
@@ -792,9 +807,15 @@ class RealtimeSession:
         user_prompt = transcript
         if summary_only:
             if self.lang == "ko":
-                user_prompt = "이전 대화 내용을 바탕으로 팀원처럼 자연스럽게 답변해줘."
+                user_prompt = (
+                    "이전 대화 내용을 바탕으로 팀원처럼 자연스럽게 답변해줘. "
+                    f"최신 발화: {transcript}"
+                )
             else:
-                user_prompt = "以前の会話内容を踏まえて、チームメンバーのように自然に回答してください。"
+                user_prompt = (
+                    "以前の会話内容を踏まえて、チームメンバーのように自然に回答してください。"
+                    f" 最新の発話: {transcript}"
+                )
             _ai_log(
                 "INFO",
                 event="ai.trigger.team_mode",
@@ -1720,7 +1741,7 @@ async def consume_audio(
             state.active_langs = target_langs
             if not target_langs:
                 now = time.time()
-                if now - last_empty_log >= 5.0:
+                if LOG_AUDIO and now - last_empty_log >= 5.0:
                     print(f"[AUDIO] {label} no active_langs (unknown_policy={unknown_policy})")
                     last_empty_log = now
 
@@ -1738,7 +1759,7 @@ async def consume_audio(
 
             frames += 1
             now = time.time()
-            if now - last_report >= 5.0:
+            if LOG_AUDIO and now - last_report >= 5.0:
                 fps = frames / (now - last_report)
                 print(f"[AUDIO] {label} fps={fps:.1f} active_langs={sorted(target_langs)}")
                 frames = 0
