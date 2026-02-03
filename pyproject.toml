@@ -23,9 +23,6 @@ cryptography = "^42.0.0"
 # Redis & Queue
 redis = "^5.0.1"
 
-# Vector Database
-qdrant-client = "^1.7.0"
-
 # Pydantic & Validation
 pydantic = "^2.5.3"
 pydantic-settings = "^2.1.0"
