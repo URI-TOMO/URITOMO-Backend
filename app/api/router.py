@@ -36,7 +36,6 @@ api_router.include_router(room_create_router, dependencies=[Depends(security_sch
 api_router.include_router(friend_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(friends_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(profile_router, dependencies=[Depends(security_scheme)])
-api_router.include_router(friend_router, dependencies=[Depends(security_scheme)])
 
 # DM Routes
 from app.api.dm.threads import router as dm_threads_router
@@ -71,7 +70,3 @@ api_router.include_router(translation_router, prefix="/translation", dependencie
 # 5. Room Chat Routes
 from app.api.room.messages import router as room_messages_router
 api_router.include_router(room_messages_router, dependencies=[Depends(security_scheme)])
-
-# 6. Worker Routes (Internal Auth)
-from app.worker.worker_token import router as worker_token_router
-api_router.include_router(worker_token_router)
