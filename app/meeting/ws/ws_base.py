@@ -117,7 +117,8 @@ async def meeting_websocket(
                         "message": "Authentication required for STT"
                     })
                     continue
-                await handle_stt_message(session_id, user_id, data)
+                session_id = data.get("session_id")
+                await handle_stt_message(room_id, session_id, user_id, data)
             
             elif msg_type == "ping":
                 await websocket.send_json({"type": "pong"})

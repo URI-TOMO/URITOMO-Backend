@@ -1,7 +1,7 @@
 """Add_RoomInvitation
 
 Revision ID: 009
-Revises: 008
+Revises: 008_add_chat_msg_trans_cols
 Create Date: 2026-02-01 12:37:01.659686
 
 """

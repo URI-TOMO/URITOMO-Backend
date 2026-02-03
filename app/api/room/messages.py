@@ -23,6 +23,8 @@ from app.models.ai import AIEvent
 from app.core.token import CurrentUserDep
 from app.core.errors import AppError
 from app.core.time import to_jst_iso
+from app.core.config import settings
+
 from app.translation.deepl_service import deepl_service
 from app.translation.openai_service import openai_service
 from app.meeting.ws.manager import manager
@@ -75,11 +77,88 @@ def _normalize_lang(lang: Optional[str]) -> str:
     if not lang:
         return "Korean"
     lang_lower = lang.strip().lower()
-    if lang_lower in {"ko", "kr", "korean"}:
+
+    if (
+        lang_lower in {"ko", "kr", "kor", "korean"}
+        or lang_lower.startswith("ko-")
+        or lang_lower.startswith("ko_")
+    ):
         return "Korean"
-    if lang_lower in {"ja", "jp", "japanese"}:
+    if (
+        lang_lower in {"ja", "jp", "jpn", "japanese"}
+        or lang_lower.startswith("ja-")
+        or lang_lower.startswith("ja_")
+    ):
+
         return "Japanese"
     return lang
+
+
+
+def _is_auto_lang(lang: Optional[str]) -> bool:
+    if not lang:
+        return False
+    return lang.strip().lower() in {"auto", "unknown", "und"}
+
+
+def _detect_lang_from_text(text: str) -> Optional[str]:
+    if not text:
+        return None
+    for ch in text:
+        code = ord(ch)
+        if 0xAC00 <= code <= 0xD7A3 or 0x1100 <= code <= 0x11FF or 0x3130 <= code <= 0x318F:
+            return "Korean"
+        if 0x3040 <= code <= 0x309F or 0x30A0 <= code <= 0x30FF or 0xFF65 <= code <= 0xFF9F:
+            return "Japanese"
+        if 0x4E00 <= code <= 0x9FFF:
+            return "Japanese"
+    return None
+
+
+def _contains_korean(text: str) -> bool:
+    for ch in text:
+        code = ord(ch)
+        if 0xAC00 <= code <= 0xD7A3 or 0x1100 <= code <= 0x11FF or 0x3130 <= code <= 0x318F:
+            return True
+    return False
+
+
+def _contains_japanese_kana(text: str) -> bool:
+    for ch in text:
+        code = ord(ch)
+        if 0x3040 <= code <= 0x309F or 0x30A0 <= code <= 0x30FF or 0xFF65 <= code <= 0xFF9F:
+            return True
+    return False
+
+
+def _should_retry_translation(
+    original_text: str,
+    translated_text: Optional[str],
+    source_lang: str,
+    target_lang: str,
+) -> bool:
+    if not translated_text:
+        return True
+    if source_lang == target_lang:
+        return False
+    if translated_text.strip() != original_text.strip():
+        return False
+    if source_lang == "Japanese" and _contains_japanese_kana(original_text):
+        return True
+    if source_lang == "Korean" and _contains_korean(original_text):
+        return True
+    if target_lang == "Korean" and _contains_japanese_kana(translated_text):
+        return True
+    if target_lang == "Japanese" and _contains_korean(translated_text):
+        return True
+    return False
+
+
+def _resolve_source_lang(text: str, lang: Optional[str]) -> str:
+    if _is_auto_lang(lang):
+        detected = _detect_lang_from_text(text)
+        return detected or "Korean"
+    return _normalize_lang(lang)
 
 
 def _looks_like_mock(text: Optional[str]) -> bool:
@@ -94,9 +173,17 @@ def _looks_like_mock(text: Optional[str]) -> bool:
     )
 
 
-async def _translate_with_fallback(text: str, source_lang: str, target_lang: str) -> Optional[str]:
+async def _translate_with_fallback(
+    text: str,
+    source_lang: str,
+    target_lang: str,
+    *,
+    allow_mock: bool = False,
+) -> Optional[str]:
     translated_text: Optional[str] = None
-    if deepl_service.enabled:
+    allow_mock = allow_mock or settings.use_mock_translation
+    deepl_failed = False
+    if deepl_service.enabled or settings.translation_provider == "MOCK":
         try:
             translated_text = deepl_service.translate_text(
                 text=text,
@@ -105,7 +192,14 @@ async def _translate_with_fallback(text: str, source_lang: str, target_lang: str
             )
         except Exception:
             translated_text = None
+        if not translated_text or not translated_text.strip():
+            deepl_failed = True
+    if _should_retry_translation(text, translated_text, source_lang, target_lang):
+        translated_text = None
+        deepl_failed = True
     if _looks_like_mock(translated_text):
+        if (allow_mock or deepl_failed) and translated_text:
+            return translated_text
         try:
             translated_text = await openai_service.translate_text(
                 text=text,
@@ -115,6 +209,8 @@ async def _translate_with_fallback(text: str, source_lang: str, target_lang: str
         except Exception:
             pass
     if _looks_like_mock(translated_text):
+        if (allow_mock or deepl_failed) and translated_text:
+            return translated_text
         return None
     return translated_text
 
@@ -196,7 +292,21 @@ async def get_room_messages(
             sender_name = "AI Assistant"
         elif msg.sender_type == "system":
             sender_name = "System"
-        
+        translated_text = msg.translated_text
+        translated_lang = msg.translated_lang
+        if msg.lang is not None:
+            source_lang = _resolve_source_lang(msg.text, msg.lang)
+            target_lang = "Japanese" if source_lang == "Korean" else "Korean"
+            if not translated_text:
+                translated_text = await _translate_with_fallback(
+                    text=msg.text,
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                    allow_mock=settings.use_mock_translation,
+                )
+            if translated_text and not translated_lang:
+                translated_lang = target_lang
+
         formatted_messages.append(
             MessageResponse(
                 id=msg.id,
@@ -206,8 +316,8 @@ async def get_room_messages(
                 display_name=sender_name,
                 text=msg.text,
                 lang=msg.lang,
-                translated_text=msg.translated_text,
-                translated_lang=msg.translated_lang,
+                translated_text=translated_text,
+                translated_lang=translated_lang,
                 created_at=to_jst_iso(msg.created_at),
             )
         )
@@ -280,7 +390,7 @@ async def send_room_message(
     next_seq = max_seq + 1
     
     # 4. Create ChatMessage
-    source_lang = _normalize_lang(payload.lang)
+    source_lang = _resolve_source_lang(text, payload.lang)
     message_id = f"msg_{uuid.uuid4().hex[:16]}"
     
     new_message = ChatMessage(
@@ -312,6 +422,7 @@ async def send_room_message(
             text=text,
             source_lang=source_lang,
             target_lang=target_lang,
+            allow_mock=settings.use_mock_translation,
         )
         
         if translated_text:

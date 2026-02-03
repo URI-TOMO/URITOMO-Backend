@@ -9,7 +9,7 @@ import time
 import uuid
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 import audioop
 import httpx
@@ -25,14 +25,83 @@ from app.models.room import RoomMember, RoomLiveSession
 from app.models.stt import RoomAiResponse, RoomSttResult
 from app.translation.deepl_service import deepl_service
 from app.translation.openai_service import openai_service
+from core.logging_system import emit_log, get_event_logger
 
 
 REALTIME_SAMPLE_RATE = 24000
 LIVEKIT_SAMPLE_RATE = 48000
-ALIEN_STAMP = "👽" * 20
 MOCK_TRANSLATION_PREFIXES = ("[KO]", "[JA]", "[TRANS]", "[Korean]", "[Japanese]")
 REALTIME_MIN_COMMIT_MS = 100
 
+STT_LOGGER = get_event_logger("uritomo.stt.worker")
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+LOG_AUDIO = _env_bool("LIVEKIT_LOG_AUDIO", True)
+LOG_VAD = _env_bool("OPENAI_REALTIME_LOG_VAD", True)
+LOG_STT_DELTA = _env_bool("OPENAI_REALTIME_LOG_STT_DELTA", True)
+LOG_STT_SEGMENT = _env_bool("OPENAI_REALTIME_LOG_STT_SEGMENT", True)
+
+
+def _stt_log(
+    level: str,
+    *,
+    event: str,
+    summary: str,
+    domain: str = "stt",
+    payload: Optional[str] = None,
+    **kv,
+) -> None:
+    emit_log(
+        STT_LOGGER,
+        level=level,
+        domain=domain,
+        event=event,
+        summary=summary,
+        kv=kv,
+        payload=payload,
+    )
+
+
+def _ai_log(
+    level: str,
+    *,
+    event: str,
+    summary: str,
+    payload: Optional[str] = None,
+    **kv,
+) -> None:
+    _stt_log(
+        level,
+        event=event,
+        summary=summary,
+        domain="ai",
+        payload=payload,
+        **kv,
+    )
+
+def _db_log(
+    level: str,
+    *,
+    event: str,
+    summary: str,
+    payload: Optional[str] = None,
+    **kv,
+) -> None:
+    _stt_log(
+        level,
+        event=event,
+        summary=summary,
+        domain="db",
+        payload=payload,
+        **kv,
+    )
 
 @dataclass
 class BackendTokenResponse:
@@ -51,12 +120,50 @@ class AuthState:
 
 
 @dataclass
+class ParticipantSessionConfig:
+    room_id: str
+    session_id: Optional[str]
+    api_key: str
+    model: str
+    base_url: str
+    transcribe_model: str
+    trigger_phrases_ko: list[str]
+    trigger_phrases_ja: list[str]
+    wake_cooldown_s: float
+    vad_threshold: float
+    vad_prefix_ms: int
+    vad_silence_ms: int
+    always_respond: bool
+    history_max_turns: int
+    summary_max_chars: int
+    db_history_turns: int
+    db_history_max_chars: int
+    db_history_scope: str
+    save_stt: bool
+    trigger_debug: bool
+    redis_url: str
+    stt_channel: str
+    force_commit_ms: int
+    trigger_summary_only: bool
+    stt_merge_window_ms: int
+    stt_merge_max_chars: int
+    trigger_broadcast: bool
+    voice_ko: str
+    voice_ja: str
+
+
+@dataclass
 class RoomState:
     room: rtc.Room
     tasks: set[asyncio.Task] = field(default_factory=set)
     router: Optional["LangRouter"] = None
     realtime_ko: Optional["RealtimeSession"] = None
     realtime_ja: Optional["RealtimeSession"] = None
+    participant_sessions: dict[str, "RealtimeSession"] = field(default_factory=dict)
+    participant_session_langs: dict[str, str] = field(default_factory=dict)
+    participant_session_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    participant_config: Optional[ParticipantSessionConfig] = None
+    broadcast_handler: Optional[Callable[["RealtimeSession", str, bool, Optional[str]], Awaitable[None]]] = None
     active_langs: set[str] = field(default_factory=set)
     ko_pub_sid: Optional[str] = None
     ja_pub_sid: Optional[str] = None
@@ -265,7 +372,8 @@ class RealtimeSession:
         transcribe_model: str,
         trigger_phrases: list[str],
         wake_cooldown_s: float,
-        output_source: rtc.AudioSource,
+        output_source: Optional[rtc.AudioSource],
+        output_enabled: bool = True,
         vad_threshold: float,
         vad_prefix_ms: int,
         vad_silence_ms: int,
@@ -274,11 +382,19 @@ class RealtimeSession:
         always_respond: bool,
         history_max_turns: int,
         summary_max_chars: int,
+        db_history_turns: int,
+        db_history_max_chars: int,
+        db_history_scope: str,
         save_stt: bool,
         trigger_debug: bool,
         redis_url: str,
         stt_channel: str,
         force_commit_ms: int,
+        trigger_summary_only: bool,
+        stt_merge_window_ms: int,
+        stt_merge_max_chars: int,
+        trigger_broadcast: bool,
+        responses_enabled: bool = True,
     ) -> None:
         self.lang = lang
         self.room_id = room_id
@@ -288,6 +404,7 @@ class RealtimeSession:
         self.base_url = base_url
         self.transcribe_model = transcribe_model
         self.output_source = output_source
+        self._output_enabled = output_enabled
         self.voice = voice
         self.output_modalities = output_modalities
         self.vad_threshold = vad_threshold
@@ -302,12 +419,19 @@ class RealtimeSession:
         self._last_wake_ts = 0.0
         self._history_max_turns = history_max_turns
         self._summary_max_chars = summary_max_chars
+        self._db_history_turns = db_history_turns
+        self._db_history_max_chars = db_history_max_chars
+        self._db_history_scope = db_history_scope
+        self._trigger_summary_only = trigger_summary_only
+        self._trigger_broadcast = trigger_broadcast
+        self._responses_enabled = responses_enabled
         self._history: list[dict[str, str]] = []
         self._assistant_partial = ""
         self._response_in_flight = False
         self._pending_transcript: Optional[str] = None
         self._pending_force = False
         self._pending_log_label: Optional[str] = None
+        self._pending_summary_only = False
         self._save_stt = save_stt
         self._last_stt_seq: Optional[int] = None
         self._last_stt_text: Optional[str] = None
@@ -315,6 +439,17 @@ class RealtimeSession:
         self._stt_channel = stt_channel
         self._force_commit_ms = max(force_commit_ms, 0)
         self._force_commit_s = self._force_commit_ms / 1000.0 if self._force_commit_ms else 0.0
+
+        self._stt_merge_window_s = max(stt_merge_window_ms, 0) / 1000.0
+        self._stt_merge_max_chars = max(stt_merge_max_chars, 0)
+        self._stt_buffer = ""
+        self._stt_buffer_speaker_id: Optional[str] = None
+        self._stt_buffer_last_ts = 0.0
+        self._stt_flush_task: Optional[asyncio.Task] = None
+        self._broadcast_handler = None
+
+    def set_broadcast_handler(self, handler) -> None:
+        self._broadcast_handler = handler
 
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._send_task: Optional[asyncio.Task] = None
@@ -491,15 +626,13 @@ class RealtimeSession:
                 }:
                     transcript = data.get("transcript") or data.get("text") or ""
                     if transcript:
-                        print(self._format_stt_block(transcript))
-                        asyncio.create_task(self._save_transcript(transcript))
-                    await self._handle_transcript(transcript)
+                        await self._queue_transcript(transcript)
                 elif event_type in {
                     "conversation.item.input_audio_transcription.delta",
                     "input_audio_transcription.delta",
                 }:
                     delta_text = data.get("delta") or data.get("text") or ""
-                    if delta_text:
+                    if LOG_STT_DELTA and delta_text:
                         print(
                             f"✨✍️✨ [STT] speaker=({self._speaker_tag()}) "
                             f"session_lang={self.lang} delta={delta_text!r} ✨✍️✨"
@@ -509,15 +642,17 @@ class RealtimeSession:
                     "input_audio_transcription.segment",
                 }:
                     segment_text = data.get("text") or ""
-                    if segment_text:
+                    if LOG_STT_SEGMENT and segment_text:
                         print(
                             f"✨🧩✨ [STT] speaker=({self._speaker_tag()}) "
                             f"session_lang={self.lang} segment={segment_text!r} ✨🧩✨"
                         )
                 elif event_type == "input_audio_buffer.speech_started":
-                    print(f"[REALTIME] vad.started lang={self.lang}")
+                    if LOG_VAD:
+                        print(f"[REALTIME] vad.started lang={self.lang}")
                 elif event_type == "input_audio_buffer.speech_stopped":
-                    print(f"[REALTIME] vad.stopped lang={self.lang}")
+                    if LOG_VAD:
+                        print(f"[REALTIME] vad.stopped lang={self.lang}")
                 elif event_type == "input_audio_buffer.committed":
                     print(f"[REALTIME] buffer.committed lang={self.lang}")
                     self._buffered_ms = 0.0
@@ -572,13 +707,123 @@ class RealtimeSession:
         except Exception as exc:
             print(f"[REALTIME] recv_loop error lang={self.lang} err={exc!r}")
 
-    async def _send_response(self, transcript: str, *, log_label: str, force: bool) -> None:
+    async def _queue_transcript(self, transcript: str) -> None:
+        if not transcript:
+            return
+        if self._stt_merge_window_s <= 0:
+            print(self._format_stt_block(transcript))
+            asyncio.create_task(self._save_transcript(transcript))
+            await self._handle_transcript(transcript)
+            return
+
+        now = time.monotonic()
+        speaker_id = self._last_speaker_identity
+
+        should_flush = False
+        reason = None
+        if self._stt_buffer:
+            if speaker_id and self._stt_buffer_speaker_id and speaker_id != self._stt_buffer_speaker_id:
+                should_flush = True
+                reason = "speaker_change"
+            elif now - self._stt_buffer_last_ts > self._stt_merge_window_s:
+                should_flush = True
+                reason = "gap"
+            elif self._stt_merge_max_chars and len(self._stt_buffer) >= self._stt_merge_max_chars:
+                should_flush = True
+                reason = "max_chars"
+
+        if should_flush:
+            await self._flush_stt_buffer(reason or "gap")
+
+        if not self._stt_buffer:
+            self._stt_buffer = transcript.strip()
+            self._stt_buffer_speaker_id = speaker_id
+        else:
+            sep = " "
+            self._stt_buffer = f"{self._stt_buffer.rstrip()}{sep}{transcript.strip()}"
+        self._stt_buffer_last_ts = now
+
+        if self._stt_flush_task and not self._stt_flush_task.done():
+            self._stt_flush_task.cancel()
+        self._stt_flush_task = asyncio.create_task(self._flush_after_delay())
+
+    async def _flush_after_delay(self) -> None:
+        try:
+            await asyncio.sleep(self._stt_merge_window_s)
+            await self._flush_stt_buffer("idle")
+        except asyncio.CancelledError:
+            return
+
+    async def _flush_stt_buffer(self, reason: str) -> None:
+        text = (self._stt_buffer or "").strip()
+        if not text:
+            return
+        self._stt_buffer = ""
+        self._stt_buffer_speaker_id = None
+        self._stt_buffer_last_ts = 0.0
+        _stt_log(
+            "INFO",
+            event="stt.merge.flush",
+            summary="Merged STT flush",
+            room_id=self.room_id,
+            session_id=self._session_id,
+            speaker_id=self._last_speaker_identity,
+            reason=reason,
+            chars=len(text),
+        )
+        print(self._format_stt_block(text))
+        asyncio.create_task(self._save_transcript(text))
+        await self._handle_transcript(text)
+
+    async def _send_response(
+        self,
+        transcript: str,
+        *,
+        log_label: str,
+        force: bool,
+        summary_only: bool,
+    ) -> None:
         now = time.monotonic()
         if not force and now - self._last_wake_ts < self._wake_cooldown_s:
+            if self._trigger_debug:
+                _ai_log(
+                    "INFO",
+                    event="ai.trigger.cooldown",
+                    summary="AI response suppressed by cooldown",
+                    room_id=self.room_id,
+                    session_id=self._session_id,
+                    lang=self.lang,
+                    cooldown_s=self._wake_cooldown_s,
+                    since_last=round(now - self._last_wake_ts, 2),
+                    payload=transcript,
+                )
             return
         self._last_wake_ts = now
         summary = self._build_history_summary()
-        system_text = self._build_system_prompt(summary)
+        db_context, db_total_rows, db_sent_rows = await self._build_db_history_context(
+            exclude_text=transcript if summary_only else None
+        )
+        system_text = self._build_system_prompt(summary, db_context)
+        user_prompt = transcript
+        if summary_only:
+            if self.lang == "ko":
+                user_prompt = (
+                    "이전 대화 내용을 바탕으로 팀원처럼 자연스럽게 답변해줘. "
+                    f"최신 발화: {transcript}"
+                )
+            else:
+                user_prompt = (
+                    "以前の会話内容を踏まえて、チームメンバーのように自然に回答してください。"
+                    f" 最新の発話: {transcript}"
+                )
+            _ai_log(
+                "INFO",
+                event="ai.trigger.team_mode",
+                summary="Trigger team-mode response",
+                room_id=self.room_id,
+                session_id=self._session_id,
+                lang=self.lang,
+            )
         await self._send_json(
             {
                 "type": "response.create",
@@ -593,25 +838,72 @@ class RealtimeSession:
                         {
                             "type": "message",
                             "role": "user",
-                            "content": [{"type": "input_text", "text": transcript}],
+                            "content": [{"type": "input_text", "text": user_prompt}],
                         }
                     ],
                 },
             }
         )
-        print(
-            f"[REALTIME] {log_label} lang={self.lang} "
-            f"summary_chars={len(summary)} transcript={transcript!r}"
+        if db_context:
+            _db_log(
+                "INFO",
+                event="db.history.sent",
+                summary="DB history attached",
+                room_id=self.room_id,
+                session_id=self._session_id,
+                lang=self.lang,
+                scope=self._db_history_scope,
+                records=db_sent_rows,
+                total_records=db_total_rows,
+                lines=db_context.count("\n") + 1,
+                chars=len(db_context),
+            )
+        else:
+            _db_log(
+                "INFO",
+                event="db.history.empty",
+                summary="No DB history attached",
+                room_id=self.room_id,
+                session_id=self._session_id,
+                lang=self.lang,
+                scope=self._db_history_scope,
+                total_records=db_total_rows,
+            )
+        _ai_log(
+            "INFO",
+            event="ai.response.request",
+            summary="AI response requested",
+            room_id=self.room_id,
+            session_id=self._session_id,
+            lang=self.lang,
+            label=log_label,
+            summary_chars=len(summary),
+            force=force,
+            payload=transcript,
         )
 
-    def _set_pending_response(self, transcript: str, log_label: str) -> None:
+    async def request_response(self, transcript: str, log_label: str, summary_only: bool) -> None:
+        if self._response_in_flight:
+            self._set_pending_response(transcript, log_label, summary_only)
+            return
+        await self._send_response(transcript, log_label=log_label, force=False, summary_only=summary_only)
+
+    def _set_pending_response(self, transcript: str, log_label: str, summary_only: bool) -> None:
         self._pending_transcript = transcript
         self._pending_force = True
         self._pending_log_label = log_label
-        print(
-            f"[REALTIME] defer response lang={self.lang} "
-            f"reason=in_flight transcript={transcript!r}"
-        )
+        self._pending_summary_only = summary_only
+        if self._trigger_debug:
+            _ai_log(
+                "INFO",
+                event="ai.trigger.defer",
+                summary="AI response deferred (in flight)",
+                room_id=self.room_id,
+                session_id=self._session_id,
+                lang=self.lang,
+                label=log_label,
+                payload=transcript,
+            )
 
     async def _flush_pending_response(self) -> None:
         transcript = self._pending_transcript
@@ -619,37 +911,78 @@ class RealtimeSession:
             return
         log_label = self._pending_log_label or "deferred response"
         force = self._pending_force
+        summary_only = self._pending_summary_only
         self._pending_transcript = None
         self._pending_log_label = None
         self._pending_force = False
-        await self._send_response(transcript, log_label=log_label, force=force)
+        self._pending_summary_only = False
+        await self._send_response(transcript, log_label=log_label, force=force, summary_only=summary_only)
 
     async def _handle_transcript(self, transcript: str) -> None:
         if not transcript:
             return
         if self._trigger_prompt and transcript.strip() == self._trigger_prompt:
-            print(
-                f"[REALTIME] ignore transcript matches trigger prompt lang={self.lang} "
-                f"transcript={transcript!r}"
-            )
+            if self._trigger_debug:
+                _ai_log(
+                    "INFO",
+                    event="ai.trigger.ignore",
+                    summary="Transcript matches trigger prompt; ignored",
+                    room_id=self.room_id,
+                    session_id=self._session_id,
+                    lang=self.lang,
+                    payload=transcript,
+                )
             return
-        self._append_history("user", transcript)
         triggered = self._always_respond or self._contains_trigger_phrase(transcript)
+        summary_only = triggered and self._trigger_summary_only and not self._always_respond
+        if not summary_only:
+            self._append_history("user", transcript)
         if self._trigger_debug and not triggered and not self._always_respond:
-            print(
-                f"[REALTIME] trigger miss lang={self.lang} "
-                f"transcript={transcript!r} normalized={self._normalize_text(transcript)!r} "
-                f"triggers={self._trigger_phrases}"
+            _ai_log(
+                "INFO",
+                event="ai.trigger.miss",
+                summary="Trigger not matched; response not sent",
+                room_id=self.room_id,
+                session_id=self._session_id,
+                lang=self.lang,
+                normalized=self._normalize_text(transcript),
+                trigger_count=len(self._trigger_phrases),
+                triggers="|".join(self._trigger_phrases[:10]),
+                payload=transcript,
             )
         if self._response_in_flight:
             if triggered:
                 log_label = "trigger detected (deferred)" if not self._always_respond else "auto response (deferred)"
-                self._set_pending_response(transcript, log_label)
+                self._set_pending_response(transcript, log_label, summary_only)
             return
         if not triggered:
             return
         log_label = "trigger detected" if not self._always_respond else "auto response"
-        await self._send_response(transcript, log_label=log_label, force=False)
+        if self._trigger_debug:
+            _ai_log(
+                "INFO",
+                event="ai.trigger.hit",
+                summary="Trigger matched",
+                room_id=self.room_id,
+                session_id=self._session_id,
+                lang=self.lang,
+                payload=transcript,
+            )
+        target_lang = normalize_lang(self._last_speaker_lang) or normalize_lang(self.lang)
+        if self._broadcast_handler:
+            if self._trigger_broadcast:
+                await self._broadcast_handler(self, transcript, summary_only, None)
+                if not self._responses_enabled:
+                    return
+                return
+            if target_lang and target_lang != self.lang:
+                await self._broadcast_handler(self, transcript, summary_only, target_lang)
+                if not self._responses_enabled:
+                    return
+                return
+        if not self._responses_enabled:
+            return
+        await self._send_response(transcript, log_label=log_label, force=False, summary_only=summary_only)
 
     def _normalize_text(self, text: str) -> str:
         cleaned = text.lower()
@@ -732,22 +1065,104 @@ class RealtimeSession:
         parts.reverse()
         return " / ".join(parts)
 
-    def _build_system_prompt(self, summary: str) -> str:
+    async def _build_db_history_context(
+        self,
+        exclude_text: Optional[str] = None,
+    ) -> tuple[str, int, int]:
+        if self._db_history_turns <= 0:
+            return "", 0, 0
+        try:
+            async with AsyncSessionLocal() as session:
+                session_id = await self._resolve_live_session_id(session)
+                if self._db_history_scope == "room":
+                    query = (
+                        select(RoomSttResult)
+                        .where(RoomSttResult.room_id == self.room_id)
+                        .order_by(RoomSttResult.created_at.desc())
+                        .limit(self._db_history_turns)
+                    )
+                else:
+                    if not session_id:
+                        return "", 0, 0
+                    query = (
+                        select(RoomSttResult)
+                        .where(RoomSttResult.session_id == session_id)
+                        .order_by(RoomSttResult.seq.desc())
+                        .limit(self._db_history_turns)
+                    )
+                result = await session.execute(query)
+                rows = list(result.scalars().all())
+        except Exception as exc:
+            _db_log(
+                "WARN",
+                event="db.history.fail",
+                summary="Failed to load DB history",
+                room_id=self.room_id,
+                session_id=self._session_id,
+                error=str(exc),
+            )
+            return "", 0, 0
+
+        total_rows = len(rows)
+        if not rows:
+            return "", 0, 0
+
+        if exclude_text:
+            needle = exclude_text.strip()
+            if needle and rows:
+                latest_text = (rows[0].stt_text or "").strip()
+                if latest_text == needle:
+                    rows = rows[1:]
+
+        rows.reverse()
+        lines: list[str] = []
+        for row in rows:
+            text = (row.stt_text or "").replace("\n", " ").strip()
+            if not text:
+                continue
+            meta = row.meta or {}
+            speaker_name = meta.get("speaker_name") or "User"
+            speaker_lang = meta.get("speaker_lang") or row.user_lang or "unknown"
+            lines.append(f"{speaker_name}({speaker_lang}): {text}")
+
+        if not lines:
+            return "", total_rows, 0
+
+        max_chars = max(self._db_history_max_chars, 0)
+        if max_chars == 0:
+            return "\n".join(lines), total_rows, len(lines)
+
+        total = 0
+        selected: list[str] = []
+        for line in reversed(lines):
+            add_len = len(line) + (1 if selected else 0)
+            if total + add_len > max_chars:
+                if not selected:
+                    selected = [line[-max_chars:]]
+                break
+            selected.append(line)
+            total += add_len
+        selected.reverse()
+        return "\n".join(selected), total_rows, len(selected)
+
+    def _build_system_prompt(self, summary: str, history_context: str) -> str:
         if self.lang == "ko":
             base = (
-                "너는 음성 비서다. 아래 대화 요약을 참고해 사용자의 최신 발화를 간단히 정리하고 "
-                "실용적인 조언을 제공하라. 반드시 한국어로만 답하라."
+                "너는 이 팀의 일원으로, 대학생이며, 반말로 해도 되고, 성격은 밝고, 친절하고, 조금 양아치 스럽기도 하고, 바람둥이야. 부산사투리로 대답해."
+                "반드시 한국어로만 답하라."
             )
-            if not summary:
-                return base + " 대화 요약: (없음)"
-            return base + f" 대화 요약: {summary}"
+            prompt = base + (" 대화 요약: (없음)" if not summary else f" 대화 요약: {summary}")
+            if history_context:
+                prompt += f"\n이전 대화 기록:\n{history_context}"
+            return prompt
         base = (
-            "あなたは音声アシスタントです。以下の会話要約を参考に、ユーザーの最新発話を簡潔に整理し、"
-            "実用的な助言を提供してください。日本語のみで回答してください。"
+            "君はこのチームの一員で、大学生で、タメ口でも構わないし、性格は明るく、親切で、ちょっとヤンキーっぽくて、浮気者だ。 関西弁で答えて。"
+            "日本語のみで回答してください。"
         )
-        if not summary:
-            return base + " 会話要約: (なし)"
-        return base + f" 会話要約: {summary}"
+        prompt = base + (" 会話要約: (なし)" if not summary else f" 会話要約: {summary}")
+        if history_context:
+            prompt += f"\n以前の会話記録:\n{history_context}"
+        return prompt
 
     def set_session_id(self, session_id: Optional[str]) -> None:
         if session_id:
@@ -783,7 +1198,12 @@ class RealtimeSession:
             async with AsyncSessionLocal() as session:
                 session_id = await self._resolve_live_session_id(session)
                 if not session_id:
-                    print(f"[STT] save skipped room_id={self.room_id} reason=no_active_session")
+                    _stt_log(
+                        "WARN",
+                        event="stt.save.skip",
+                        summary="STT save skipped (no active session)",
+                        room_id=self.room_id,
+                    )
                     return
                 if member_id is None and speaker_id not in self._member_cache:
                     result = await session.execute(
@@ -814,9 +1234,13 @@ class RealtimeSession:
                         await session.commit()
                         member_id = new_member.id
                         self._member_cache[speaker_id] = member_id
-                        print(
-                            "🧾 [STT] created room_member "
-                            f"room_id={self.room_id} member_id={member_id} speaker_id={speaker_id}"
+                        _stt_log(
+                            "INFO",
+                            event="stt.member.created",
+                            summary="Room member created for STT",
+                            room_id=self.room_id,
+                            member_id=member_id,
+                            user_id=speaker_id,
                         )
                     except IntegrityError:
                         await session.rollback()
@@ -830,9 +1254,12 @@ class RealtimeSession:
                         member_id = member.id if member else None
                         self._member_cache[speaker_id] = member_id
                     if not member_id:
-                        print(
-                            f"[STT] save skipped room_id={self.room_id} "
-                            f"reason=no_member speaker_id={speaker_id}"
+                        _stt_log(
+                            "WARN",
+                            event="stt.save.skip",
+                            summary="STT save skipped (no member)",
+                            room_id=self.room_id,
+                            user_id=speaker_id,
                         )
                         return
 
@@ -860,7 +1287,13 @@ class RealtimeSession:
                             if translated_text:
                                 translated_lang = target_lang_code
                         except Exception as exc:
-                            print(f"[STT] translate failed room_id={self.room_id} err={exc!r}")
+                            _stt_log(
+                                "WARN",
+                                event="stt.translate.fail",
+                                summary="STT translation failed",
+                                room_id=self.room_id,
+                                error=str(exc),
+                            )
 
                 for _ in range(3):
                     seq_result = await session.execute(
@@ -892,11 +1325,17 @@ class RealtimeSession:
                         await session.commit()
                         self._last_stt_seq = next_seq
                         self._last_stt_text = transcript
-                        print(
-                            f"{ALIEN_STAMP} 🧾 [STT] saved room_stt_results "
-                            f"room_id={self.room_id} session_id={session_id} "
-                            f"seq={next_seq} member_id={member_id} lang={self.lang} "
-                            f"text={transcript!r} translated={translated_text!r}"
+                        _stt_log(
+                            "INFO",
+                            event="stt.saved",
+                            summary="STT saved",
+                            room_id=self.room_id,
+                            session_id=session_id,
+                            seq=next_seq,
+                            member_id=member_id,
+                            lang=self.lang,
+                            translated_lang=translated_lang,
+                            payload=transcript,
                         )
                         await self._publish_stt_event(
                             room_id=self.room_id,
@@ -923,7 +1362,13 @@ class RealtimeSession:
                         await session.rollback()
                         continue
         except Exception as exc:
-            print(f"[STT] save failed room_id={self.room_id} err={exc!r}")
+            _stt_log(
+                "ERROR",
+                event="stt.save.fail",
+                summary="STT save failed",
+                room_id=self.room_id,
+                error=str(exc),
+            )
 
     async def _publish_stt_event(self, room_id: str, message: dict) -> None:
         payload = {
@@ -934,8 +1379,27 @@ class RealtimeSession:
         try:
             redis = aioredis.from_url(self._redis_url, encoding="utf-8", decode_responses=True)
             await redis.publish(self._stt_channel, json.dumps(payload, ensure_ascii=False))
+            data = message.get("data") or {}
+            _stt_log(
+                "INFO",
+                domain="redis",
+                event="stt.redis.pub",
+                summary="STT event published",
+                room_id=room_id,
+                session_id=data.get("session_id"),
+                seq=data.get("seq"),
+                channel=self._stt_channel,
+            )
         except Exception as exc:
-            print(f"[STT] publish failed room_id={room_id} err={exc!r}")
+            _stt_log(
+                "ERROR",
+                domain="redis",
+                event="stt.redis.pub_fail",
+                summary="STT publish failed",
+                room_id=room_id,
+                error=str(exc),
+                channel=self._stt_channel,
+            )
         finally:
             if redis:
                 try:
@@ -1000,6 +1464,8 @@ class RealtimeSession:
     async def _push_audio(self, pcm16_24k: bytes) -> None:
         if not pcm16_24k:
             return
+        if not self._output_enabled or self.output_source is None:
+            return
         if self.output_source.sample_rate != REALTIME_SAMPLE_RATE:
             pcm16_24k, self._out_state = pcm16_resample(
                 pcm16_24k,
@@ -1011,6 +1477,8 @@ class RealtimeSession:
         await self._flush_output()
 
     async def _flush_output(self) -> None:
+        if not self._output_enabled or self.output_source is None:
+            return
         frame_ms = 20
         samples = int(self.output_source.sample_rate * frame_ms / 1000)
         frame_bytes = samples * self.output_source.num_channels * 2
@@ -1142,6 +1610,88 @@ def resolve_target_langs(participant_lang: Optional[str], unknown_policy: str) -
     return set()
 
 
+def _resolve_participant_info(
+    state: RoomState,
+    participant_identity: str,
+    fallback_name: Optional[str],
+    fallback_lang: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    participant = state.room.remote_participants.get(participant_identity)
+    if not participant:
+        return fallback_name, fallback_lang
+    name = participant.name or fallback_name
+    lang = None
+    try:
+        lang = normalize_lang((participant.attributes or {}).get("lang"))
+    except Exception:
+        lang = None
+    return name, lang or fallback_lang
+
+
+async def _ensure_participant_session(
+    state: RoomState,
+    *,
+    participant_identity: str,
+    participant_name: Optional[str],
+    participant_lang: Optional[str],
+) -> Optional["RealtimeSession"]:
+    config = state.participant_config
+    if not config:
+        return None
+    lang = normalize_lang(participant_lang)
+    if lang not in {"ko", "ja"}:
+        return None
+    async with state.participant_session_lock:
+        existing = state.participant_sessions.get(participant_identity)
+        if existing and state.participant_session_langs.get(participant_identity) == lang:
+            return existing
+        if existing:
+            await existing.close()
+            state.participant_sessions.pop(participant_identity, None)
+            state.participant_session_langs.pop(participant_identity, None)
+        trigger_phrases = config.trigger_phrases_ko if lang == "ko" else config.trigger_phrases_ja
+        voice = config.voice_ko if lang == "ko" else config.voice_ja
+        session = RealtimeSession(
+            lang=lang,
+            room_id=config.room_id,
+            session_id=config.session_id,
+            api_key=config.api_key,
+            model=config.model,
+            base_url=config.base_url,
+            transcribe_model=config.transcribe_model,
+            trigger_phrases=trigger_phrases,
+            wake_cooldown_s=config.wake_cooldown_s,
+            output_source=None,
+            output_enabled=False,
+            vad_threshold=config.vad_threshold,
+            vad_prefix_ms=config.vad_prefix_ms,
+            vad_silence_ms=config.vad_silence_ms,
+            voice=voice,
+            output_modalities=["text"],
+            always_respond=config.always_respond,
+            history_max_turns=config.history_max_turns,
+            summary_max_chars=config.summary_max_chars,
+            db_history_turns=config.db_history_turns,
+            db_history_max_chars=config.db_history_max_chars,
+            db_history_scope=config.db_history_scope,
+            trigger_summary_only=config.trigger_summary_only,
+            save_stt=config.save_stt,
+            trigger_debug=config.trigger_debug,
+            redis_url=config.redis_url,
+            stt_channel=config.stt_channel,
+            force_commit_ms=config.force_commit_ms,
+            stt_merge_window_ms=config.stt_merge_window_ms,
+            stt_merge_max_chars=config.stt_merge_max_chars,
+            trigger_broadcast=config.trigger_broadcast,
+            responses_enabled=False,
+        )
+        session.set_broadcast_handler(state.broadcast_handler)
+        await session.start()
+        state.participant_sessions[participant_identity] = session
+        state.participant_session_langs[participant_identity] = lang
+        return session
+
+
 async def consume_audio(
     track: rtc.Track,
     *,
@@ -1181,24 +1731,35 @@ async def consume_audio(
                 state=resample_state,
             )
 
-            target_langs = resolve_target_langs(participant_lang, unknown_policy)
+            current_name, current_lang = _resolve_participant_info(
+                state,
+                participant_identity,
+                participant_name,
+                participant_lang,
+            )
+            target_langs = resolve_target_langs(current_lang, unknown_policy)
             state.active_langs = target_langs
             if not target_langs:
                 now = time.time()
-                if now - last_empty_log >= 5.0:
+                if LOG_AUDIO and now - last_empty_log >= 5.0:
                     print(f"[AUDIO] {label} no active_langs (unknown_policy={unknown_policy})")
                     last_empty_log = now
 
-            if "ko" in target_langs and state.realtime_ko:
-                state.realtime_ko.note_speaker(participant_identity, participant_name, participant_lang)
-                state.realtime_ko.send_audio(data)
-            if "ja" in target_langs and state.realtime_ja:
-                state.realtime_ja.note_speaker(participant_identity, participant_name, participant_lang)
-                state.realtime_ja.send_audio(data)
+            session = None
+            if target_langs:
+                session = await _ensure_participant_session(
+                    state,
+                    participant_identity=participant_identity,
+                    participant_name=current_name,
+                    participant_lang=current_lang,
+                )
+            if session:
+                session.note_speaker(participant_identity, current_name, current_lang)
+                session.send_audio(data)
 
             frames += 1
             now = time.time()
-            if now - last_report >= 5.0:
+            if LOG_AUDIO and now - last_report >= 5.0:
                 fps = frames / (now - last_report)
                 print(f"[AUDIO] {label} fps={fps:.1f} active_langs={sorted(target_langs)}")
                 frames = 0
@@ -1279,11 +1840,18 @@ async def connect_room(
     always_respond: bool,
     history_max_turns: int,
     summary_max_chars: int,
+    db_history_turns: int,
+    db_history_max_chars: int,
+    db_history_scope: str,
+    trigger_summary_only: bool,
     save_stt: bool,
     trigger_debug: bool,
     redis_url: str,
     stt_channel: str,
     force_commit_ms: int,
+    trigger_broadcast: bool,
+    stt_merge_window_ms: int,
+    stt_merge_max_chars: int,
 ) -> None:
     if room_id in rooms:
         state = rooms.get(room_id)
@@ -1293,6 +1861,10 @@ async def connect_room(
                 state.realtime_ko.set_session_id(session_id)
             if state.realtime_ja:
                 state.realtime_ja.set_session_id(session_id)
+            for session in state.participant_sessions.values():
+                session.set_session_id(session_id)
+            if state.participant_config:
+                state.participant_config.session_id = session_id
         return
 
     token_resp = await fetch_livekit_token_with_retry(
@@ -1307,6 +1879,56 @@ async def connect_room(
     state = RoomState(room=room)
     state.session_id = session_id
     rooms[room_id] = state
+
+    async def _broadcast_response(
+        source: RealtimeSession,
+        transcript: str,
+        summary_only: bool,
+        target_lang: Optional[str],
+    ) -> None:
+        tasks = []
+        for session in (state.realtime_ko, state.realtime_ja):
+            if not session:
+                continue
+            if target_lang and session.lang != target_lang:
+                continue
+            label = "trigger detected" if session is source else "trigger broadcast"
+            tasks.append(session.request_response(transcript, label, summary_only))
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    state.broadcast_handler = _broadcast_response
+    state.participant_config = ParticipantSessionConfig(
+        room_id=room_id,
+        session_id=session_id,
+        api_key=realtime_key,
+        model=realtime_model,
+        base_url=realtime_url,
+        transcribe_model=transcribe_model,
+        trigger_phrases_ko=trigger_phrases_ko,
+        trigger_phrases_ja=trigger_phrases_ja,
+        wake_cooldown_s=wake_cooldown_s,
+        vad_threshold=vad_threshold,
+        vad_prefix_ms=vad_prefix_ms,
+        vad_silence_ms=vad_silence_ms,
+        always_respond=always_respond,
+        history_max_turns=history_max_turns,
+        summary_max_chars=summary_max_chars,
+        db_history_turns=db_history_turns,
+        db_history_max_chars=db_history_max_chars,
+        db_history_scope=db_history_scope,
+        save_stt=save_stt,
+        trigger_debug=trigger_debug,
+        redis_url=redis_url,
+        stt_channel=stt_channel,
+        force_commit_ms=force_commit_ms,
+        trigger_summary_only=trigger_summary_only,
+        stt_merge_window_ms=stt_merge_window_ms,
+        stt_merge_max_chars=stt_merge_max_chars,
+        trigger_broadcast=trigger_broadcast,
+        voice_ko=voice_ko,
+        voice_ja=voice_ja,
+    )
 
     @room.on("participant_connected")
     def _on_participant_connected(participant: rtc.RemoteParticipant):
@@ -1328,6 +1950,10 @@ async def connect_room(
         print(f"🔴👤 [ROOM] participant_disconnected room_id={room_id} identity={participant.identity}")
         if state.router:
             state.router.schedule_recompute("participant_disconnected")
+        session = state.participant_sessions.pop(participant.identity, None)
+        state.participant_session_langs.pop(participant.identity, None)
+        if session:
+            asyncio.create_task(session.close())
         if state.empty_check_task and not state.empty_check_task.done():
             state.empty_check_task.cancel()
         state.empty_check_task = asyncio.create_task(_disconnect_if_empty(room_id, rooms))
@@ -1340,6 +1966,16 @@ async def connect_room(
         )
         if state.router and "lang" in changed:
             state.router.schedule_recompute("participant_attributes_changed")
+        if "lang" in changed:
+            new_lang = normalize_lang((participant.attributes or {}).get("lang"))
+            asyncio.create_task(
+                _ensure_participant_session(
+                    state,
+                    participant_identity=participant.identity,
+                    participant_name=participant.name,
+                    participant_lang=new_lang,
+                )
+            )
 
     @room.on("track_subscribed")
     def _on_track_subscribed(
@@ -1355,6 +1991,14 @@ async def connect_room(
         )
         if track.kind == rtc.TrackKind.KIND_AUDIO:
             label = f"room={room_id} from={participant.identity} track_sid={track.sid}"
+            asyncio.create_task(
+                _ensure_participant_session(
+                    state,
+                    participant_identity=participant.identity,
+                    participant_name=participant.name,
+                    participant_lang=lang,
+                )
+            )
             task = asyncio.create_task(
                 consume_audio(
                     track,
@@ -1431,11 +2075,18 @@ async def connect_room(
         always_respond=always_respond,
         history_max_turns=history_max_turns,
         summary_max_chars=summary_max_chars,
+        db_history_turns=db_history_turns,
+        db_history_max_chars=db_history_max_chars,
+        db_history_scope=db_history_scope,
+        trigger_summary_only=trigger_summary_only,
         save_stt=save_stt,
         trigger_debug=trigger_debug,
         redis_url=redis_url,
         stt_channel=stt_channel,
         force_commit_ms=force_commit_ms,
+        stt_merge_window_ms=stt_merge_window_ms,
+        stt_merge_max_chars=stt_merge_max_chars,
+        trigger_broadcast=trigger_broadcast,
     )
     state.realtime_ja = RealtimeSession(
         lang="ja",
@@ -1456,12 +2107,22 @@ async def connect_room(
         always_respond=always_respond,
         history_max_turns=history_max_turns,
         summary_max_chars=summary_max_chars,
+        db_history_turns=db_history_turns,
+        db_history_max_chars=db_history_max_chars,
+        db_history_scope=db_history_scope,
+        trigger_summary_only=trigger_summary_only,
         save_stt=save_stt,
         trigger_debug=trigger_debug,
         redis_url=redis_url,
         stt_channel=stt_channel,
         force_commit_ms=force_commit_ms,
+        stt_merge_window_ms=stt_merge_window_ms,
+        stt_merge_max_chars=stt_merge_max_chars,
+        trigger_broadcast=trigger_broadcast,
     )
+
+    state.realtime_ko.set_broadcast_handler(state.broadcast_handler)
+    state.realtime_ja.set_broadcast_handler(state.broadcast_handler)
 
     await asyncio.gather(state.realtime_ko.start(), state.realtime_ja.start())
     print(f"🤖🇰🇷 [AGENT] ready lang=ko room_id={room_id} track={ko_track}")
@@ -1497,6 +2158,10 @@ async def disconnect_room(room_id: str, rooms: dict[str, RoomState]) -> None:
         await state.realtime_ko.close()
     if state.realtime_ja:
         await state.realtime_ja.close()
+    for session in list(state.participant_sessions.values()):
+        await session.close()
+    state.participant_sessions.clear()
+    state.participant_session_langs.clear()
     await maybe_await(state.room.disconnect())
     print(f"[BOOT] disconnected room_id={room_id}")
 
@@ -1530,8 +2195,15 @@ async def listen_room_events(
     always_respond: bool,
     history_max_turns: int,
     summary_max_chars: int,
+    db_history_turns: int,
+    db_history_max_chars: int,
+    db_history_scope: str,
+    trigger_summary_only: bool,
+    trigger_broadcast: bool,
     save_stt: bool,
     trigger_debug: bool,
+    stt_merge_window_ms: int,
+    stt_merge_max_chars: int,
 ) -> None:
     redis = aioredis.from_url(redis_url, encoding="utf-8", decode_responses=True)
     pubsub = redis.pubsub()
@@ -1582,10 +2254,17 @@ async def listen_room_events(
                         always_respond=always_respond,
                         history_max_turns=history_max_turns,
                         summary_max_chars=summary_max_chars,
+                        db_history_turns=db_history_turns,
+                        db_history_max_chars=db_history_max_chars,
+                        db_history_scope=db_history_scope,
+                        trigger_summary_only=trigger_summary_only,
+                        trigger_broadcast=trigger_broadcast,
                         save_stt=save_stt,
                         trigger_debug=trigger_debug,
                         redis_url=redis_url,
                         stt_channel=stt_channel,
+                        stt_merge_window_ms=stt_merge_window_ms,
+                        stt_merge_max_chars=stt_merge_max_chars,
                     )
                 except Exception as exc:
                     print(f"[EVENT] join failed room_id={room_id} error={exc!r}")
@@ -1660,6 +2339,12 @@ async def main() -> None:
         for part in re.split(r"[,\n、，]+", trigger_ja_raw)
         if part.strip()
     ]
+    trigger_shared_value = os.getenv("OPENAI_TRIGGER_SHARED", "true")
+    trigger_shared = trigger_shared_value.lower() in {"1", "true", "yes", "y", "on"}
+    if trigger_shared:
+        merged = list(dict.fromkeys(trigger_phrases_ko + trigger_phrases_ja))
+        trigger_phrases_ko = merged
+        trigger_phrases_ja = merged
     wake_cooldown_raw = os.getenv("OPENAI_WAKE_COOLDOWN_SECONDS")
     wake_cooldown_s = float(wake_cooldown_raw or "2.0")
     always_respond_value = os.getenv("OPENAI_ALWAYS_RESPOND", "false")
@@ -1668,7 +2353,7 @@ async def main() -> None:
         wake_cooldown_s = 0.0
     vad_threshold = float(os.getenv("OPENAI_REALTIME_VAD_THRESHOLD", "0.5"))
     vad_prefix_ms = int(os.getenv("OPENAI_REALTIME_VAD_PREFIX_MS", "300"))
-    vad_silence_ms = int(os.getenv("OPENAI_REALTIME_VAD_SILENCE_MS", "500"))
+    vad_silence_ms = int(os.getenv("OPENAI_REALTIME_VAD_SILENCE_MS", "800"))
     force_commit_ms = int(os.getenv("OPENAI_REALTIME_FORCE_COMMIT_MS", "0"))
 
     if not backend:
@@ -1677,12 +2362,27 @@ async def main() -> None:
         raise RuntimeError("Missing OPENAI_API_KEY")
     history_max_turns = int(os.getenv("OPENAI_HISTORY_MAX_TURNS", "0"))
     summary_max_chars = int(os.getenv("OPENAI_HISTORY_SUMMARY_MAX_CHARS", "800"))
+    db_history_turns = int(os.getenv("OPENAI_HISTORY_DB_TURNS", "12"))
+    db_history_max_chars = int(os.getenv("OPENAI_HISTORY_DB_MAX_CHARS", "1200"))
+    db_history_scope = os.getenv("OPENAI_HISTORY_DB_SCOPE", "room").strip().lower()
+    if db_history_scope not in {"room", "session"}:
+        db_history_scope = "session"
+    trigger_summary_only_value = os.getenv("OPENAI_TRIGGER_SUMMARY_ONLY", "true")
+    trigger_summary_only = trigger_summary_only_value.lower() in {"1", "true", "yes", "y", "on"}
+    trigger_broadcast_value = os.getenv("OPENAI_TRIGGER_BROADCAST", "true")
+    trigger_broadcast = trigger_broadcast_value.lower() in {"1", "true", "yes", "y", "on"}
+    stt_merge_window_ms = int(os.getenv("OPENAI_STT_MERGE_WINDOW_MS", "900"))
+    stt_merge_max_chars = int(os.getenv("OPENAI_STT_MERGE_MAX_CHARS", "180"))
     save_stt_value = os.getenv("OPENAI_STT_SAVE", "true")
     save_stt = save_stt_value.lower() in {"1", "true", "yes", "y", "on"}
     print(
         f"[BOOT] stt_config save_stt={save_stt} "
         f"transcribe_model={transcribe_model} output_modalities={output_modalities} "
-        f"vad_threshold={vad_threshold} force_commit_ms={force_commit_ms}"
+        f"vad_threshold={vad_threshold} force_commit_ms={force_commit_ms} "
+        f"db_history_turns={db_history_turns} db_history_scope={db_history_scope} "
+        f"trigger_summary_only={trigger_summary_only} trigger_broadcast={trigger_broadcast} "
+        f"trigger_shared={trigger_shared} "
+        f"merge_window_ms={stt_merge_window_ms} merge_max_chars={stt_merge_max_chars}"
     )
     trigger_debug_value = os.getenv("OPENAI_TRIGGER_DEBUG", "false")
     trigger_debug = trigger_debug_value.lower() in {"1", "true", "yes", "y", "on"}
@@ -1742,10 +2442,17 @@ async def main() -> None:
             always_respond=always_respond,
             history_max_turns=history_max_turns,
             summary_max_chars=summary_max_chars,
+            db_history_turns=db_history_turns,
+            db_history_max_chars=db_history_max_chars,
+            db_history_scope=db_history_scope,
+            trigger_summary_only=trigger_summary_only,
+            trigger_broadcast=trigger_broadcast,
             save_stt=save_stt,
             trigger_debug=trigger_debug,
             redis_url=redis_url,
             stt_channel=stt_channel,
+            stt_merge_window_ms=stt_merge_window_ms,
+            stt_merge_max_chars=stt_merge_max_chars,
         )
 
     await listen_room_events(
@@ -1777,8 +2484,15 @@ async def main() -> None:
         always_respond=always_respond,
         history_max_turns=history_max_turns,
         summary_max_chars=summary_max_chars,
+        db_history_turns=db_history_turns,
+        db_history_max_chars=db_history_max_chars,
+        db_history_scope=db_history_scope,
+        trigger_summary_only=trigger_summary_only,
+        trigger_broadcast=trigger_broadcast,
         save_stt=save_stt,
         trigger_debug=trigger_debug,
+        stt_merge_window_ms=stt_merge_window_ms,
+        stt_merge_max_chars=stt_merge_max_chars,
     )
 
 

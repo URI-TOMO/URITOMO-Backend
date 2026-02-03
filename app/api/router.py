@@ -18,6 +18,7 @@ from app.api.user.friends import router as friends_router
 from app.meeting.ws.ws_base import router as meeting_ws_router
 from app.meeting.live_history import router as meeting_history_router
 from app.meeting.livekit.api import router as livekit_router
+from app.worker.worker_token import router as worker_router
 
 from app.core.token import security_scheme
 
@@ -48,6 +49,7 @@ api_router.include_router(dm_ws_router)
 api_router.include_router(meeting_history_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(livekit_router, dependencies=[Depends(security_scheme)])
 api_router.include_router(meeting_ws_router)
+api_router.include_router(worker_router)
 
 # 3. Summary Routes (Protected)
 from app.api.summary.documents import router as summary_documents_router
