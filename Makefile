@@ -5,7 +5,6 @@ help:
 	@echo "URITOMO Backend - Available Commands:"
 	@echo ""
 	@echo "  make up              - Start all services"
-	@echo "  make up-storage      - Start all services including MinIO"
 	@echo "  make down            - Stop all services"
 	@echo "  make restart         - Restart all services"
 	@echo "  make logs            - View logs from all services"
@@ -32,11 +31,6 @@ up:
 	docker-compose up -d
 	@echo "Services started. API available at http://localhost:8000"
 	@echo "API docs at http://localhost:8000/docs"
-
-up-storage:
-	docker-compose --profile with-storage up -d
-	@echo "Services started with MinIO storage."
-	@echo "MinIO console at http://localhost:9001"
 
 down:
 	docker-compose down

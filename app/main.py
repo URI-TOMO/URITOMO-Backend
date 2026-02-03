@@ -24,7 +24,6 @@ from app.core.errors import (
 from app.core.logging import setup_logging, RequestIDMiddleware, RequestLoggingMiddleware, WebSocketLoggingMiddleware
 from app.infra.db import close_db_connection
 from app.infra.redis import init_redis_pool, close_redis_pool
-from app.infra.qdrant import init_qdrant_client, close_qdrant_client, ensure_collections_exist
 from app.meeting.stt_events import start_stt_event_listener
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException
@@ -35,16 +34,7 @@ async def lifespan(app: FastAPI):
     # Startup
     setup_logging()
     await init_redis_pool()
-    await init_qdrant_client()
     stt_listener_task = asyncio.create_task(start_stt_event_listener())
-    
-    # Initialize Qdrant collections background text
-    # In production, this might be better as a migration step
-    try:
-        await ensure_collections_exist()
-    except Exception as e:
-        # Don't fail startup if qdrant is down, but log it
-        print(f"Warning: Failed to initialize Qdrant collections: {e}")
         
     yield
     
@@ -52,7 +42,6 @@ async def lifespan(app: FastAPI):
     stt_listener_task.cancel()
     await asyncio.gather(stt_listener_task, return_exceptions=True)
     await close_redis_pool()
-    await close_qdrant_client()
     await close_db_connection()
 
 
