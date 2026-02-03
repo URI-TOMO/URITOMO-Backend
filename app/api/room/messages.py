@@ -24,6 +24,7 @@ from app.core.token import CurrentUserDep
 from app.core.errors import AppError
 from app.core.time import to_jst_iso
 from app.core.config import settings
+
 from app.translation.deepl_service import deepl_service
 from app.translation.openai_service import openai_service
 from app.meeting.ws.manager import manager
@@ -76,6 +77,7 @@ def _normalize_lang(lang: Optional[str]) -> str:
     if not lang:
         return "Korean"
     lang_lower = lang.strip().lower()
+
     if (
         lang_lower in {"ko", "kr", "kor", "korean"}
         or lang_lower.startswith("ko-")
@@ -87,8 +89,10 @@ def _normalize_lang(lang: Optional[str]) -> str:
         or lang_lower.startswith("ja-")
         or lang_lower.startswith("ja_")
     ):
+
         return "Japanese"
     return lang
+
 
 
 def _is_auto_lang(lang: Optional[str]) -> bool:
