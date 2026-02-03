@@ -27,9 +27,6 @@ class Settings(BaseSettings):
     debug: bool = True
     log_level: str = "INFO"
 
-    # API Server
-    api_host: str = "0.0.0.0"
-    api_port: int = 8000
     api_prefix: str = ""
 
     # Database
@@ -43,21 +40,6 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
     redis_db: int = 0
-    redis_session_ttl: int = 3600  # 1 hour
-
-    # Qdrant
-    qdrant_host: str = "localhost"
-    qdrant_port: int = 6333
-    qdrant_url: str = "http://localhost:6333"
-    qdrant_api_key: str = ""
-
-    # MinIO (Optional)
-    minio_endpoint: str = "localhost:9000"
-    minio_access_key: str = "minioadmin"
-    minio_secret_key: str = "minioadmin"
-    minio_bucket_name: str = "uritomo-transcripts"
-    minio_use_ssl: bool = False
-
     # Security
     jwt_secret_key: str = Field(min_length=32)
     jwt_algorithm: str = "HS256"
@@ -67,10 +49,8 @@ class Settings(BaseSettings):
     # External APIs
     openai_api_key: Optional[str] = None
     openai_model: str = "gpt-5-nano"
-    openai_embedding_model: str = "text-embedding-3-small"
 
     deepl_api_key: Optional[str] = None
-    deepl_api_url: str = "https://api-free.deepl.com/v2/translate"
 
     # LiveKit
     livekit_url: Optional[str] = None
@@ -79,33 +59,8 @@ class Settings(BaseSettings):
 
     # Translation Settings
     translation_provider: Literal["OPENAI", "DEEPL", "MOCK"] = "MOCK"
-    default_source_lang: str = "ja"
-    default_target_lang: str = "ko"
-    enable_streaming: bool = True
-
-    # Embedding
-    embedding_provider: Literal["OPENAI", "MOCK"] = "MOCK"
-    embedding_dimension: int = 1536
-
-    # RAG Settings
-    rag_top_k: int = 5
-    rag_similarity_threshold: float = 0.7
-    culture_cards_collection: str = "culture_cards"
-    glossary_collection_prefix: str = "glossary_"
-
-    # Explanation Settings
-    explanation_max_length: int = 200
-    explanation_enable_rule_based: bool = True
-    explanation_enable_model_based: bool = False
-
-    # Summary Settings
-    summary_provider: Literal["OPENAI", "MOCK"] = "MOCK"
-    summary_model: str = "gpt-4-turbo-preview"
 
     # Background Worker
-    worker_queues: list[str] = ["default", "high", "low"]
-    worker_result_ttl: int = 3600
-    worker_job_timeout: int = 600
     worker_service_key: Optional[str] = None
 
     # CORS
@@ -121,20 +76,8 @@ class Settings(BaseSettings):
     cors_methods: list[str] = ["*"]
     cors_headers: list[str] = ["*"]
 
-    # Rate Limiting
-    rate_limit_enabled: bool = True
-    rate_limit_per_minute: int = 60
-
-    # Monitoring
-    sentry_dsn: str = ""
-    sentry_environment: str = "development"
-    sentry_traces_sample_rate: float = 0.1
-
     # Feature Flags
     enable_websocket: bool = True
-    enable_explanation: bool = True
-    enable_summary: bool = True
-    enable_storage: bool = False
 
     @validator("cors_origins", pre=True)
     def assemble_cors_origins(cls, v: any) -> list[str]:
@@ -167,12 +110,6 @@ class Settings(BaseSettings):
     def use_mock_translation(self) -> bool:
         """Check if using mock translation"""
         return self.translation_provider == "MOCK" or not self.openai_api_key
-
-    @property
-    def use_mock_embedding(self) -> bool:
-        """Check if using mock embedding"""
-        return self.embedding_provider == "MOCK" or not self.openai_api_key
-
 
 @lru_cache()
 def get_settings() -> Settings:
