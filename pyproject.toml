@@ -131,11 +131,7 @@ follow_imports = "normal"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = [
-    "qdrant_client.*",
-    "minio.*",
-    "rq.*",
-]
+module = []
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
